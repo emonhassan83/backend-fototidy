@@ -23,16 +23,8 @@ router.put(
 
 router.delete('/:id', auth(USER_ROLE.admin), PackageControllers.deleteAPackage)
 
-router.get(
-  '/',
-  auth(USER_ROLE.admin, USER_ROLE.user),
-  PackageControllers.getAllPackages,
-)
+router.get('/', PackageControllers.getAllPackages)
 
-router.get(
-  '/:id',
-  auth(USER_ROLE.admin, USER_ROLE.user),
-  PackageControllers.getAPackage,
-)
+router.get('/:id', PackageControllers.getAPackage)
 
 export const PackageRoutes = router

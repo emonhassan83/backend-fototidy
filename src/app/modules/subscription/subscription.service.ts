@@ -129,13 +129,22 @@ export const startSubscriptionCron = () => {
   })
 }
 
-const verifySubscription = async (payload: { userId: string }) => {
-  const { userId } = payload
+const verifySubscription = async (payload: {
+  userId: string
+  packageId?: string
+}) => {
+  const { userId, packageId } = payload
 
   // ✅ Validate user exists
   const user = await User.findById(userId)
   if (!user || user.isDeleted) {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+  }
+
+  // 2. Validate Package (যাতে ভুল packageId না আসে)
+  const selectedPackage = await Package.findById(packageId)
+  if (!selectedPackage || selectedPackage.isDeleted) {
+    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid Package selected!')
   }
 
   const REVENUECAT_SECRET = config.revenue_cat.secret_key
@@ -182,7 +191,8 @@ const verifySubscription = async (payload: { userId: string }) => {
       }
     }
 
-    const expiredAt = new Date(proEntitlement.expires_date)
+    const expiredAt = new Date(proEntitlement.expires_date);
+    const rcProductId = proEntitlement.product_identifier;
 
     // ✅ Update or create subscription
     const subscription = await Subscription.findOneAndUpdate(
@@ -191,17 +201,22 @@ const verifySubscription = async (payload: { userId: string }) => {
         user: userId,
         revenueCatAppUserId: userId,
         entitlement: 'Foto Tidy Pro',
-        productId: proEntitlement.product_identifier,
-        status: 'active',
+        productId: rcProductId,
+        package: packageId,
+        status: SUBSCRIPTION_STATUS.active,
         expiredAt,
+        revenueCatTransactionId: proEntitlement.original_transaction_id || null,
       },
-      { upsert: true, new: true },
+      { upsert: true, new: true, runValidators: true }
     )
 
     // ✅ Update user's package expiry
     await User.findByIdAndUpdate(userId, {
       packageExpiry: expiredAt,
     })
+    console.log(
+      `✅ Subscription verified with Package ${packageId} for user ${userId}`,
+    )
 
     return subscription
   } catch (error: any) {
