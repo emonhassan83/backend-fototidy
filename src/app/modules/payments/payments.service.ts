@@ -9,68 +9,61 @@ import { PAYMENT_STATUS } from './payments.constants'
 import { notifyUserAboutSubscriptionChange } from './payments.utils'
 
 const handleRevenueCatWebhook = async (event: any) => {
-  console.log(`📥 RevenueCat Webhook: ${event.type} | User: ${event.app_user_id}`)
+  console.log(`📥 RevenueCat Webhook: ${event.type} | User: ${event.app_user_id}`);
 
-  const userId = event.app_user_id
-  const eventType = event.type as string
-  const entitlement = event.entitlement_ids?.[0] || 'Foto Tidy Pro'
-  const expiredAt = event.expiration_at_ms ? new Date(event.expiration_at_ms) : null
+  const userId = event.app_user_id;
+  const eventType = event.type as string;
+  const entitlement = event.entitlement_ids?.[0] || 'Foto Tidy Pro';
+  const expiredAt = event.expiration_at_ms ? new Date(event.expiration_at_ms) : null;
 
   if (!userId || !eventType) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid webhook payload')
+    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid webhook payload');
   }
 
-  const session = await mongoose.startSession()
-  session.startTransaction()
+  const MAX_RETRIES = 3;
+  let lastError: any;
 
-  try {
-    // ====================== 1. Subscription Management ======================
-    let subscription = await Subscription.findOne({
-      revenueCatAppUserId: userId,
-    }).session(session)
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const session = await mongoose.startSession();
 
-    const isTerminalEvent = ['EXPIRATION', 'CANCELLATION'].includes(eventType)
+    try {
+      await session.withTransaction(async () => {
+        // ====================== 1. Subscription Management ======================
+        let subscription = await Subscription.findOne({
+          revenueCatAppUserId: userId,
+        }).session(session);
 
-    if (subscription) {
-      subscription.entitlement = entitlement
-      subscription.productId = event.product_id || subscription.productId
-      subscription.status = isTerminalEvent ? 'expired' : 'active'
-      if (expiredAt) {
-        subscription.expiredAt = expiredAt
-      }
-      subscription.revenueCatTransactionId =
-        event.original_transaction_id || event.transaction_id
-      await subscription.save({ session })
-    } else {
-      ;[subscription] = await Subscription.create(
-        [
-          {
+        const isTerminalEvent = ['EXPIRATION', 'CANCELLATION'].includes(eventType);
+
+        if (subscription) {
+          subscription.entitlement = entitlement;
+          subscription.productId = event.product_id || subscription.productId;
+          subscription.status = isTerminalEvent ? 'expired' : 'active';
+          if (expiredAt) subscription.expiredAt = expiredAt;
+          subscription.revenueCatTransactionId = event.original_transaction_id || event.transaction_id;
+          await subscription.save({ session });
+        } else {
+          [subscription] = await Subscription.create([{
             user: userId,
             revenueCatAppUserId: userId,
             entitlement,
             productId: event.product_id,
             status: isTerminalEvent ? 'expired' : 'active',
             expiredAt,
-            revenueCatTransactionId:
-              event.original_transaction_id || event.transaction_id,
-          },
-        ],
-        { session },
-      )
-    }
+            revenueCatTransactionId: event.original_transaction_id || event.transaction_id,
+          }], { session });
+        }
 
-    // ====================== 2. Payment Record ======================
-    if (['INITIAL_PURCHASE', 'RENEWAL'].includes(eventType)) {
-      const transactionId = event.original_transaction_id || event.transaction_id
+        // ====================== 2. Payment Record (Idempotent) ======================
+        if (['INITIAL_PURCHASE', 'RENEWAL'].includes(eventType)) {
+          const transactionId = event.original_transaction_id || event.transaction_id;
 
-      const existingPayment = await Payment.findOne({
-        revenueCatTransactionId: transactionId,
-      }).session(session)
+          const existingPayment = await Payment.findOne({
+            revenueCatTransactionId: transactionId,
+          }).session(session);
 
-      if (!existingPayment) {
-        await Payment.create(
-          [
-            {
+          if (!existingPayment) {
+            await Payment.create([{
               user: userId,
               subscription: subscription._id,
               revenueCatEventType: eventType,
@@ -79,54 +72,47 @@ const handleRevenueCatWebhook = async (event: any) => {
               amount: event.price || 0,
               currency: event.currency || 'USD',
               status: PAYMENT_STATUS.paid,
-              purchasedAt: event.purchased_at_ms
-                ? new Date(event.purchased_at_ms)
-                : new Date(),
+              purchasedAt: event.purchased_at_ms ? new Date(event.purchased_at_ms) : new Date(),
               rawEventData: event,
-            },
-          ],
-          { session },
-        )
+            }], { session });
 
-        console.log(`💰 ${eventType} Payment Recorded | Amount: ${event.price}`)
+            console.log(`💰 ${eventType} Payment Recorded | Amount: ${event.price}`);
+          }
+        }
+
+        // ====================== 3. Update User ======================
+        if (expiredAt && !isTerminalEvent) {
+          await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt }, { session });
+        } else if (isTerminalEvent) {
+          await User.findByIdAndUpdate(userId, { packageExpiry: null }, { session });
+        }
+      });
+
+      // Success
+      console.log(`✅ Webhook processed successfully: ${eventType} for user ${userId}`);
+      return { success: true, eventType, userId };
+
+    } catch (error: any) {
+      lastError = error;
+      await session.abortTransaction();
+
+      const isRetryable = error.code === 112 || 
+                         error.hasErrorLabel?.('TransientTransactionError') ||
+                         error.message?.includes('WriteConflict');
+
+      if (isRetryable && attempt < MAX_RETRIES) {
+        console.warn(`⚠️ WriteConflict on attempt ${attempt} for ${eventType}. Retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 100 * attempt)); // exponential backoff
+        continue;
       }
+
+      console.error(`❌ Webhook Error (${eventType}) after ${attempt} attempts:`, error);
+      throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Webhook processing failed');
+    } finally {
+      session.endSession();
     }
-
-    // ====================== 3. Update User Package Expiry ======================
-    if (expiredAt && !isTerminalEvent) {
-      await User.findByIdAndUpdate(
-        userId,
-        { packageExpiry: expiredAt },
-        { session },
-      )
-    } else if (isTerminalEvent) {
-      await User.findByIdAndUpdate(
-        userId,
-        { packageExpiry: null },
-        { session },
-      )
-    }
-
-    // ====================== 4. Notify User ======================
-    if (eventType === 'INITIAL_PURCHASE' || eventType === 'RENEWAL') {
-      await notifyUserAboutSubscriptionChange(userId, eventType, expiredAt)
-    } else if (['EXPIRATION', 'CANCELLATION'].includes(eventType)) {
-      await notifyUserAboutSubscriptionChange(userId, eventType)
-    }
-
-    await session.commitTransaction()
-
-    console.log(`✅ Webhook processed successfully: ${eventType} for user ${userId}`)
-
-    return { success: true, eventType, userId }
-  } catch (error: any) {
-    await session.abortTransaction()
-    console.error(`❌ Webhook Error (${eventType}):`, error)
-    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Webhook processing failed')
-  } finally {
-    session.endSession()
   }
-}
+};
 
 const getAllPaymentsFromDB = async (query: Record<string, any>) => {
   const paymentModel = new QueryBuilder(
