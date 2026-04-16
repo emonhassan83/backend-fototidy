@@ -141,7 +141,7 @@ const verifySubscription = async (payload: {
   }
 
   const REVENUECAT_SECRET = config.revenue_cat.secret_key;
-  const REVENUECAT_PROJECT_ID = config.revenue_cat.project_id;   // ← .env থেকে নিন
+  const REVENUECAT_PROJECT_ID = config.revenue_cat.project_id;
 
   if (!REVENUECAT_SECRET || !REVENUECAT_PROJECT_ID) {
     throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'RevenueCat configuration missing');
@@ -177,38 +177,47 @@ const verifySubscription = async (payload: {
 
     const data = await response.json();
 
-    // V2-এ structure আলাদা
-    const entitlements = data.customer?.entitlements || data.subscriber?.entitlements || {};
+    // Debug full response
+    console.log('RevenueCat Customer Data:', JSON.stringify(data, null, 2));
 
+    const entitlements = data.customer?.entitlements || {};
     console.log('Available Entitlements (V2):', Object.keys(entitlements));
 
-    const proEntitlement = entitlements['Foto Tidy Pro'];
+    // Flexible entitlement mapping
+    const entitlementKeys = ['pro', 'core', 'pro_year', 'core_year'];
+    let activeEntitlement: any = null;
+    let entitlementName: string | null = null;
 
-    if (!proEntitlement || !proEntitlement.expiresAt) {   // V2-এ expiresAt হতে পারে
+    for (const key of entitlementKeys) {
+      if (entitlements[key]) {
+        activeEntitlement = entitlements[key];
+        entitlementName = key;
+        break;
+      }
+    }
+
+    if (!activeEntitlement || !activeEntitlement.expiresAt) {
       await Subscription.updateOne(
         { user: userId },
         { status: SUBSCRIPTION_STATUS.expired }
       );
-
       return { active: false, message: 'No active subscription found' };
     }
 
-    const expiredAt = new Date(proEntitlement.expiresAt || proEntitlement.expires_date);
-    const rcProductId = proEntitlement.productIdentifier || proEntitlement.product_identifier;
-
-    // ... বাকি লজিক (subscription update, user update) একই রাখুন
+    const expiredAt = new Date(activeEntitlement.expiresAt || activeEntitlement.expires_date);
+    const rcProductId = activeEntitlement.productIdentifier || activeEntitlement.product_identifier;
 
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
         user: userId,
         revenueCatAppUserId: userId,
-        entitlement: 'Foto Tidy Pro',
+        entitlement: entitlementName,
         productId: rcProductId,
         package: packageId,
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
-        revenueCatTransactionId: proEntitlement.originalTransactionId || null,
+        revenueCatTransactionId: activeEntitlement.originalTransactionId || null,
       },
       { upsert: true, new: true }
     );
