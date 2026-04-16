@@ -142,7 +142,9 @@ const verifySubscription = async (payload: {
   }
 
   // 2. Validate Package (যাতে ভুল packageId না আসে)
-  const selectedPackage = await Package.findById(packageId)
+  const selectedPackage = await Package.findOne({
+    revenueCatProductId: packageId,
+  })
   if (!selectedPackage || selectedPackage.isDeleted) {
     throw new AppError(httpStatus.BAD_REQUEST, 'Invalid Package selected!')
   }
@@ -191,8 +193,8 @@ const verifySubscription = async (payload: {
       }
     }
 
-    const expiredAt = new Date(proEntitlement.expires_date);
-    const rcProductId = proEntitlement.product_identifier;
+    const expiredAt = new Date(proEntitlement.expires_date)
+    const rcProductId = proEntitlement.product_identifier
 
     // ✅ Update or create subscription
     const subscription = await Subscription.findOneAndUpdate(
@@ -207,7 +209,7 @@ const verifySubscription = async (payload: {
         expiredAt,
         revenueCatTransactionId: proEntitlement.original_transaction_id || null,
       },
-      { upsert: true, new: true, runValidators: true }
+      { upsert: true, new: true, runValidators: true },
     )
 
     // ✅ Update user's package expiry
