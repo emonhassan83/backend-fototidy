@@ -131,72 +131,98 @@ export const startSubscriptionCron = () => {
 
 const verifySubscription = async (payload: {
   userId: string
-  packageId?: string
+  packageId?: string   // এটি এখন optional রাখছি, কারণ RevenueCat থেকে product পাওয়া যায়
 }) => {
-  const { userId, packageId } = payload
+  const { userId, packageId } = payload;
 
-  // ✅ Validate user exists
-  const user = await User.findById(userId)
+  // 1. Validate User
+  const user = await User.findById(userId);
   if (!user || user.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
-  // 2. Validate Package (যাতে ভুল packageId না আসে)
-  const selectedPackage = await Package.findOne({
-    revenueCatProductId: packageId,
-  })
-  if (!selectedPackage || selectedPackage.isDeleted) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid Package selected!')
-  }
-
-  const REVENUECAT_SECRET = config.revenue_cat.secret_key
+  const REVENUECAT_SECRET = config.revenue_cat.secret_key;
   if (!REVENUECAT_SECRET) {
-    throw new AppError(
-      httpStatus.INTERNAL_SERVER_ERROR,
-      'RevenueCat configuration missing',
-    )
+    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'RevenueCat configuration missing');
   }
 
   try {
-    // ✅ Fetch from RevenueCat
+    console.log(`🔍 Verifying subscription for user: ${userId}`);
+
     const response = await fetch(
-      `https://api.revenuecat.com/v1/subscribers/${userId}`,
+      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
       {
+        method: 'GET',
         headers: {
           Authorization: `Bearer ${REVENUECAT_SECRET}`,
           'Content-Type': 'application/json',
         },
-      },
-    )
+      }
+    );
 
+    // ✅ Better Error Logging
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ RevenueCat API Error: ${response.status} ${response.statusText}`);
+      console.error(`Response Body: ${errorText}`);
+
+      if (response.status === 404) {
+        throw new AppError(
+          httpStatus.NOT_FOUND,
+          `Subscriber not found in RevenueCat. User may not have purchased yet.`
+        );
+      }
+
       throw new AppError(
-        httpStatus.BAD_REQUEST,
-        'Failed to verify subscription from RevenueCat',
-      )
+        httpStatus.BAD_GATEWAY,
+        `RevenueCat API failed: ${response.status} - ${errorText.substring(0, 200)}`
+      );
     }
 
-    const data = await response.json()
-    const entitlements = data.subscriber?.entitlements || {}
-    const proEntitlement = entitlements['Foto Tidy Pro'] // ✅ Your entitlement name
+    const data = await response.json();
+
+    console.log('✅ RevenueCat Response Received:', {
+      requestUserId: userId,
+      hasSubscriber: !!data.subscriber,
+      entitlementsCount: Object.keys(data.subscriber?.entitlements || {}).length,
+    });
+
+    const entitlements = data.subscriber?.entitlements || {};
+    
+    // Debug: সব entitlement দেখান
+    console.log('Available Entitlements:', Object.keys(entitlements));
+
+    // আপনার entitlement নাম চেক করুন (স্ক্রিনশট অনুযায়ী)
+    const proEntitlement = entitlements['Foto Tidy Pro'];
 
     if (!proEntitlement || !proEntitlement.expires_date) {
-      // ✅ No active subscription
+      console.log(`⚠️ No active "Foto Tidy Pro" entitlement for user ${userId}`);
+
       await Subscription.updateOne(
         { user: userId },
-        { status: SUBSCRIPTION_STATUS.expired },
-      )
+        { status: SUBSCRIPTION_STATUS.expired, expiredAt: new Date() }
+      );
 
       return {
         active: false,
         message: 'No active subscription found',
-      }
+        entitlements: Object.keys(entitlements),
+      };
     }
 
-    const expiredAt = new Date(proEntitlement.expires_date)
-    const rcProductId = proEntitlement.product_identifier
+    const expiredAt = new Date(proEntitlement.expires_date);
+    const rcProductId = proEntitlement.product_identifier;
 
-    // ✅ Update or create subscription
+    // Find package from rcProductId (যদি packageId না থাকে)
+    let finalPackageId = packageId;
+    if (!finalPackageId && rcProductId) {
+      const matchedPackage = await Package.findOne({ 
+        revenueCatProductId: rcProductId 
+      });
+      finalPackageId = matchedPackage?._id;
+    }
+
+    // Update/Create Subscription
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
@@ -204,31 +230,41 @@ const verifySubscription = async (payload: {
         revenueCatAppUserId: userId,
         entitlement: 'Foto Tidy Pro',
         productId: rcProductId,
-        package: packageId,
+        package: finalPackageId,
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
         revenueCatTransactionId: proEntitlement.original_transaction_id || null,
       },
-      { upsert: true, new: true, runValidators: true },
-    )
+      { upsert: true, new: true, runValidators: true }
+    );
 
-    // ✅ Update user's package expiry
-    await User.findByIdAndUpdate(userId, {
-      packageExpiry: expiredAt,
-    })
-    console.log(
-      `✅ Subscription verified with Package ${packageId} for user ${userId}`,
-    )
+    // Update User
+    await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt });
 
-    return subscription
+    console.log(`✅ Subscription verified successfully for user ${userId}. Expires: ${expiredAt}`);
+
+    return {
+      active: true,
+      subscription,
+      expiredAt,
+      productId: rcProductId,
+    };
+
   } catch (error: any) {
-    console.error('RevenueCat Verify Error:', error)
+    console.error('RevenueCat Verify Error Details:', {
+      message: error.message,
+      statusCode: error.statusCode,
+      stack: error.stack?.substring(0, 300),
+    });
+
+    if (error instanceof AppError) throw error;
+
     throw new AppError(
       httpStatus.INTERNAL_SERVER_ERROR,
-      error.message || 'Failed to verify subscription',
-    )
+      error.message || 'Failed to verify subscription from RevenueCat'
+    );
   }
-}
+};
 
 const getAllSubscription = async (query: Record<string, any>) => {
   const subscriptionModel = new QueryBuilder(
