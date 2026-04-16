@@ -12,7 +12,7 @@ const packageSchema = new Schema<TPackage>(
       enum: Object.values(durationType),
       required: true,
     },
-
+    revenueCatProductId: { String },
     description: { type: [String], required: true },
     price: { type: Number, required: true },
     popularity: { type: Number, default: 0 },

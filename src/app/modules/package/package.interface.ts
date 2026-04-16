@@ -9,6 +9,7 @@ export type TPackage = {
   billingCycle?: TDurationType
   description: string[]
   price: number
+  revenueCatProductId: string
   popularity: number
   isDeleted: boolean
 }
