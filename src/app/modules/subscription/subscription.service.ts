@@ -176,27 +176,13 @@ const verifySubscription = async (payload: {
     }
 
     const data = await response.json();
-
-    // Debug full response
     console.log('RevenueCat Customer Data:', JSON.stringify(data, null, 2));
 
-    const entitlements = data.customer?.entitlements || {};
-    console.log('Available Entitlements (V2):', Object.keys(entitlements));
+    // V2 structure: active_entitlements.items[]
+    const activeEntitlements = data.active_entitlements?.items || [];
+    console.log('Available Active Entitlements:', activeEntitlements);
 
-    // Flexible entitlement mapping
-    const entitlementKeys = ['pro', 'core', 'pro_year', 'core_year'];
-    let activeEntitlement: any = null;
-    let entitlementName: string | null = null;
-
-    for (const key of entitlementKeys) {
-      if (entitlements[key]) {
-        activeEntitlement = entitlements[key];
-        entitlementName = key;
-        break;
-      }
-    }
-
-    if (!activeEntitlement || !activeEntitlement.expiresAt) {
+    if (activeEntitlements.length === 0) {
       await Subscription.updateOne(
         { user: userId },
         { status: SUBSCRIPTION_STATUS.expired }
@@ -204,20 +190,22 @@ const verifySubscription = async (payload: {
       return { active: false, message: 'No active subscription found' };
     }
 
-    const expiredAt = new Date(activeEntitlement.expiresAt || activeEntitlement.expires_date);
-    const rcProductId = activeEntitlement.productIdentifier || activeEntitlement.product_identifier;
+    // ধরো প্রথম entitlement active আছে
+    const ent = activeEntitlements[0];
+    const expiredAt = new Date(ent.expires_at);
+    const entitlementId = ent.entitlement_id;
 
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
         user: userId,
         revenueCatAppUserId: userId,
-        entitlement: entitlementName,
-        productId: rcProductId,
+        entitlement: entitlementId, // আসল entitlement id
+        productId: null,            // V2 response এ productIdentifier আলাদা endpoint থেকে পাওয়া যায়
         package: packageId,
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
-        revenueCatTransactionId: activeEntitlement.originalTransactionId || null,
+        revenueCatTransactionId: null,
       },
       { upsert: true, new: true }
     );
@@ -233,6 +221,8 @@ const verifySubscription = async (payload: {
       : new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Failed to verify subscription');
   }
 };
+
+
 
 const getAllSubscription = async (query: Record<string, any>) => {
   const subscriptionModel = new QueryBuilder(
