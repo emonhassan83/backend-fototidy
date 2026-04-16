@@ -1,21 +1,18 @@
 import { Model, Types } from 'mongoose'
-import { TUser } from '../user/user.interface'
-import { TSubscriptions } from '../subscription/subscription.interface'
-import { TPaymentStatus } from './payments.constants'
 
 export interface TPayment {
-  _id?: Types.ObjectId
-  user: Types.ObjectId | TUser
-  subscription: Types.ObjectId | TSubscriptions
+  _id?: Types.ObjectId;
+  user: Types.ObjectId;
+  subscription: Types.ObjectId;
   revenueCatEventType: 'INITIAL_PURCHASE' | 'RENEWAL' | 'CANCELLATION' | 'EXPIRATION' | 'REFUND';
-  revenueCatProductId?: string
-  revenueCatTransactionId?: string
-  amount: number
+  revenueCatProductId?: string;
+  revenueCatTransactionId?: string;
+  amount: number;
   currency?: string;
-  status: TPaymentStatus
-  rawEventData?: unknown
+  status: string;
+  isDeleted?: boolean;
   purchasedAt?: Date;
-  isDeleted: boolean
+  rawEventData?: any;
   createdAt?: Date;
   updatedAt?: Date;
 }

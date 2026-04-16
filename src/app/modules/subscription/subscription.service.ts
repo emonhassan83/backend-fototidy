@@ -12,6 +12,7 @@ import { modeType } from '../notification/notification.interface'
 import { sendNotification } from '../../utils/sentNotification'
 import emailSender from '../../utils/emailSender'
 import config from '../../config'
+import mongoose from 'mongoose'
 
 export const startSubscriptionCron = () => {
   cron.schedule('0 0 * * *', async () => {
@@ -130,11 +131,12 @@ export const startSubscriptionCron = () => {
 }
 
 const verifySubscription = async (payload: {
-  userId: string
-  packageId?: string
+  userId: string;
+  packageId?: string;
 }) => {
   const { userId, packageId } = payload;
 
+  // ✅ Validate user
   const user = await User.findById(userId);
   if (!user || user.isDeleted) {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
@@ -144,7 +146,10 @@ const verifySubscription = async (payload: {
   const REVENUECAT_PROJECT_ID = config.revenue_cat.project_id;
 
   if (!REVENUECAT_SECRET || !REVENUECAT_PROJECT_ID) {
-    throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'RevenueCat configuration missing');
+    throw new AppError(
+      httpStatus.INTERNAL_SERVER_ERROR,
+      'RevenueCat configuration missing'
+    );
   }
 
   try {
@@ -166,7 +171,10 @@ const verifySubscription = async (payload: {
       console.error(`❌ RevenueCat V2 API Error: ${response.status} - ${errorText}`);
 
       if (response.status === 404) {
-        throw new AppError(httpStatus.NOT_FOUND, 'Subscriber not found in RevenueCat');
+        throw new AppError(
+          httpStatus.NOT_FOUND,
+          'Subscriber not found in RevenueCat'
+        );
       }
 
       throw new AppError(
@@ -183,46 +191,69 @@ const verifySubscription = async (payload: {
     console.log('Available Active Entitlements:', activeEntitlements);
 
     if (activeEntitlements.length === 0) {
+      // No active subscription
       await Subscription.updateOne(
         { user: userId },
         { status: SUBSCRIPTION_STATUS.expired }
       );
-      return { active: false, message: 'No active subscription found' };
+      return {
+        active: false,
+        message: 'No active subscription found',
+      };
     }
 
-    // ধরো প্রথম entitlement active আছে
+    // Get first active entitlement
     const ent = activeEntitlements[0];
     const expiredAt = new Date(ent.expires_at);
     const entitlementId = ent.entitlement_id;
 
+    // 🔥 FIX: Build update object conditionally
+    const updateData: any = {
+      user: userId,
+      revenueCatAppUserId: userId,
+      entitlement: entitlementId,
+      productId: null, // V2 doesn't provide this directly
+      status: SUBSCRIPTION_STATUS.active,
+      expiredAt,
+      revenueCatTransactionId: null,
+    };
+
+    // ✅ Only add package if it's a valid ObjectId
+    if (packageId && mongoose.Types.ObjectId.isValid(packageId)) {
+      updateData.package = packageId;
+    } else if (packageId) {
+      console.warn(`⚠️ Invalid packageId: ${packageId}, skipping package field`);
+    }
+
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
-      {
-        user: userId,
-        revenueCatAppUserId: userId,
-        entitlement: entitlementId, // আসল entitlement id
-        productId: null,            // V2 response এ productIdentifier আলাদা endpoint থেকে পাওয়া যায়
-        package: packageId,
-        status: SUBSCRIPTION_STATUS.active,
-        expiredAt,
-        revenueCatTransactionId: null,
-      },
+      updateData,
       { upsert: true, new: true }
     );
 
-    await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt });
+    // Update user package expiry
+    await User.findByIdAndUpdate(userId, {
+      packageExpiry: expiredAt,
+    });
 
-    return { active: true, subscription };
+    console.log(`✅ Subscription verified: ${subscription._id}`);
 
+    return {
+      active: true,
+      subscription,
+      expiredAt,
+      message: 'Subscription verified successfully',
+    };
   } catch (error: any) {
     console.error('RevenueCat Verify Error:', error);
-    throw error instanceof AppError 
-      ? error 
-      : new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Failed to verify subscription');
+    throw error instanceof AppError
+      ? error
+      : new AppError(
+          httpStatus.INTERNAL_SERVER_ERROR,
+          'Failed to verify subscription'
+        );
   }
 };
-
-
 
 const getAllSubscription = async (query: Record<string, any>) => {
   const subscriptionModel = new QueryBuilder(

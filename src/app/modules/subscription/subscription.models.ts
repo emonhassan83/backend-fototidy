@@ -41,8 +41,8 @@ const subscriptionsSchema = new Schema<TSubscriptions>(
   },
   {
     timestamps: true,
-  },
-)
+  }
+);
 
 // Compound index for user subscription lookup
 subscriptionsSchema.index({ user: 1, status: 1 });
