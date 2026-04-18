@@ -116,19 +116,19 @@ const geUserByIdFromDB = async (id: string) => {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
-  // Step 2: Fetch global free storage limit
+  // Step 2: Fetch global free storage limit from Contents
   const content = await Contents.findOne({ isDeleted: false })
     .select('freeStorage')
     .lean();
 
   const storageLimit = content?.freeStorage ?? 0;
 
-  // Step 3: Format freeStorage
+  // Step 3: Format freeStorage to 1 decimal place
   const formattedFreeStorage = user.freeStorage
     ? Number(user.freeStorage.toFixed(1))
     : 0;
 
-  // Step 4: Check active subscription (Apple IAP + Direct DB)
+  // Step 4: Check active subscription
   const today = new Date();
   const activeSubscription = await Subscription.findOne({
     user: id,
@@ -136,25 +136,33 @@ const geUserByIdFromDB = async (id: string) => {
     isDeleted: false,
     expiredAt: { $gt: today },
   })
-    .select('entitlement productId expiredAt transactionId')
+    .select('entitlement productId packageIdentifier expiredAt transactionId')
     .lean();
 
   const isActiveSubscription = !!activeSubscription;
 
-  // Determine subscription type based on productId (most accurate)
+  // ✅ Determine subscription type based on productId or packageIdentifier
   let subscriptionType: 'core' | 'pro' | null = null;
   let isProUser = false;
 
   if (activeSubscription) {
-    const prodId = (activeSubscription.productId || '').toString().toLowerCase().trim();
+    const prodId = (
+      activeSubscription.productId ||
+      activeSubscription.packageIdentifier ||
+      activeSubscription.entitlement ||
+      ''
+    )
+      .toString()
+      .toLowerCase()
+      .trim();
 
     if (prodId === 'pro' || prodId === 'pro_year') {
       subscriptionType = 'pro';
       isProUser = true;
     } else if (prodId === 'core' || prodId === 'core_year') {
       subscriptionType = 'core';
-    }
-    // Fallback (if productId missing)
+    } 
+    // Fallback: entitlement name check
     else if (activeSubscription.entitlement?.toLowerCase().includes('pro')) {
       subscriptionType = 'pro';
       isProUser = true;
@@ -179,13 +187,16 @@ const geUserByIdFromDB = async (id: string) => {
     storageLimit,
     isActiveSubscription,
     type: subscriptionType,           // 'core' | 'pro' | null
-    isProUser,                        // boolean - Pro user কিনা
-    subscription: activeSubscription ? {   // extra details
-      entitlement: activeSubscription.entitlement,
-      productId: activeSubscription.productId,
-      expiredAt: activeSubscription.expiredAt,
-      transactionId: activeSubscription.revenueCatTransactionId,
-    } : null,
+    isProUser,                        // boolean - Pro features unlock করার জন্য
+    subscription: activeSubscription
+      ? {
+          entitlement: activeSubscription.entitlement,
+          productId: activeSubscription.productId,
+          packageIdentifier: activeSubscription.packageIdentifier,
+          expiredAt: activeSubscription.expiredAt,
+          transactionId: activeSubscription.transactionId,
+        }
+      : null,
     isGalleryLock,
     isActiveFreeTrial,
   };

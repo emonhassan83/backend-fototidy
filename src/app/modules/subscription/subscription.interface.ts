@@ -8,6 +8,9 @@ export interface TSubscriptions {
   productId?: string;
   revenueCatTransactionId?: string;
   package?: Types.ObjectId;
+  packageIdentifier: string;
+  transactionId: string;
+  receiptData: string
   status: 'active' | 'expired' | 'cancelled' | 'grace_period';
   expiredAt?: Date;
   isDeleted?: boolean;
