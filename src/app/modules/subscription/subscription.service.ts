@@ -191,11 +191,15 @@ const verifySubscription = async (payload: {
     console.log('Available Active Entitlements:', activeEntitlements);
 
     if (activeEntitlements.length === 0) {
-      // No active subscription
+      // No active subscription → mark as expired
       await Subscription.updateOne(
         { user: userId },
         { status: SUBSCRIPTION_STATUS.expired }
       );
+
+      // Optional: Clear user package expiry
+      await User.findByIdAndUpdate(userId, { packageExpiry: null });
+
       return {
         active: false,
         message: 'No active subscription found',
@@ -205,14 +209,16 @@ const verifySubscription = async (payload: {
     // Get first active entitlement
     const ent = activeEntitlements[0];
     const expiredAt = new Date(ent.expires_at);
-    const entitlementId = ent.entitlement_id;
+    const entitlementId = ent.entitlement_id;   // Example: entl5dc44f3e12
 
-    // 🔥 FIX: Build update object conditionally
+    console.log(`Active entitlement found: ${entitlementId}, expires at: ${expiredAt}`);
+
+    // 🔥 Build update object
     const updateData: any = {
       user: userId,
       revenueCatAppUserId: userId,
-      entitlement: entitlementId,
-      productId: null, // V2 doesn't provide this directly
+      entitlement: entitlementId,        // RevenueCat-এর entitlement ID (entlxxxx)
+      productId: null,                   // webhook থেকে আপডেট হবে (core / pro / core_year / pro_year)
       status: SUBSCRIPTION_STATUS.active,
       expiredAt,
       revenueCatTransactionId: null,
@@ -225,6 +231,7 @@ const verifySubscription = async (payload: {
       console.warn(`⚠️ Invalid packageId: ${packageId}, skipping package field`);
     }
 
+    // Upsert subscription
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       updateData,
@@ -236,16 +243,19 @@ const verifySubscription = async (payload: {
       packageExpiry: expiredAt,
     });
 
-    console.log(`✅ Subscription verified: ${subscription._id}`);
+    console.log(`✅ Subscription verified successfully: ${subscription._id} | Entitlement: ${entitlementId}`);
 
     return {
       active: true,
       subscription,
       expiredAt,
+      entitlementId,
       message: 'Subscription verified successfully',
     };
+
   } catch (error: any) {
     console.error('RevenueCat Verify Error:', error);
+
     throw error instanceof AppError
       ? error
       : new AppError(
