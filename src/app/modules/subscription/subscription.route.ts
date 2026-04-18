@@ -9,14 +9,12 @@ const router = Router()
 
 router.post(
   '/verify',
-  auth(USER_ROLE.user),
-  zodValidationRequest(subscriptionValidation.verifyValidationSchema),
+  // zodValidationRequest(subscriptionValidation.verifyValidationSchema),
   subscriptionController.verifySubscription,
 )
 router.post(
   '/restore',
-  auth(USER_ROLE.user),
-  zodValidationRequest(subscriptionValidation.verifyValidationSchema),
+  // zodValidationRequest(subscriptionValidation.verifyValidationSchema),
   subscriptionController.verifySubscription,
 )
 router.post(
