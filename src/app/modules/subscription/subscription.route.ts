@@ -13,6 +13,16 @@ router.post(
   zodValidationRequest(subscriptionValidation.verifyValidationSchema),
   subscriptionController.verifySubscription,
 )
+router.post(
+  '/restore',
+  auth(USER_ROLE.user),
+  zodValidationRequest(subscriptionValidation.verifyValidationSchema),
+  subscriptionController.verifySubscription,
+)
+router.post(
+  '/webhook/apple',
+  subscriptionController.handleAppleServerNotification,
+)
 
 router.delete(
   '/:id',

@@ -38,6 +38,9 @@ export default {
     secret_key: process.env.REVENUECAT_SECRET_KEY,
     project_id: process.env.REVENUECAT_PROJECT_ID,
   },
+  apple: {
+    shared_secret: process.env.APPLE_SHARED_SECRET,
+  },
   payment_success_url: process.env.PAYMENT_SUCCESS_URL,
   payment_cancel_url: process.env.PAYMENT_CANCEL_URL,
   aws: {

@@ -105,20 +105,30 @@ const getAllUsersFromDB = async (query: Record<string, unknown>) => {
 }
 
 const geUserByIdFromDB = async (id: string) => {
+  // Step 1: Find the user with necessary fields
   const user = await User.findOne({ _id: id })
-    .select('_id id name email photoUrl contractNumber freeStorage status isActiveLock isEnabledFreeTrial freeTrialExpiry createdAt galleryKey isDeactivateLock')
+    .select(
+      '_id id name email photoUrl contractNumber freeStorage status isActiveLock isEnabledFreeTrial freeTrialExpiry createdAt galleryKey isDeactivateLock',
+    )
     .lean();
 
   if (!user || user.isDeleted) {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
-  const content = await Contents.findOne({ isDeleted: false }).select('freeStorage').lean();
+  // Step 2: Fetch global free storage limit
+  const content = await Contents.findOne({ isDeleted: false })
+    .select('freeStorage')
+    .lean();
+
   const storageLimit = content?.freeStorage ?? 0;
 
-  const formattedFreeStorage = user.freeStorage ? Number(user.freeStorage.toFixed(1)) : 0;
+  // Step 3: Format freeStorage
+  const formattedFreeStorage = user.freeStorage
+    ? Number(user.freeStorage.toFixed(1))
+    : 0;
 
-  // ==================== Active Subscription Check ====================
+  // Step 4: Check active subscription (Apple IAP + Direct DB)
   const today = new Date();
   const activeSubscription = await Subscription.findOne({
     user: id,
@@ -126,55 +136,56 @@ const geUserByIdFromDB = async (id: string) => {
     isDeleted: false,
     expiredAt: { $gt: today },
   })
-    .select('entitlement expiredAt productId package')   // productId অবশ্যই নেবে
-    .populate([{ path: 'package', select: 'type' }])
+    .select('entitlement productId expiredAt transactionId')
     .lean();
 
   const isActiveSubscription = !!activeSubscription;
 
+  // Determine subscription type based on productId (most accurate)
   let subscriptionType: 'core' | 'pro' | null = null;
   let isProUser = false;
 
   if (activeSubscription) {
     const prodId = (activeSubscription.productId || '').toString().toLowerCase().trim();
 
-    // === Primary Check: productId (সবচেয়ে নির্ভুল) ===
     if (prodId === 'pro' || prodId === 'pro_year') {
       subscriptionType = 'pro';
       isProUser = true;
     } else if (prodId === 'core' || prodId === 'core_year') {
       subscriptionType = 'core';
-    } 
-    // === Fallback: entitlement name ===
+    }
+    // Fallback (if productId missing)
     else if (activeSubscription.entitlement?.toLowerCase().includes('pro')) {
       subscriptionType = 'pro';
       isProUser = true;
     } else if (activeSubscription.entitlement?.toLowerCase().includes('core')) {
       subscriptionType = 'core';
-    } 
-    // === Last Fallback: package type ===
-    else if (activeSubscription.package && typeof activeSubscription.package === 'object') {
-      const pkgType = (activeSubscription.package as any).type;
-      if (pkgType === 'pro' || pkgType === 'core') {
-        subscriptionType = pkgType;
-        isProUser = pkgType === 'pro';
-      }
     }
   }
 
+  // Step 5: Gallery lock
   const isGalleryLock = !!user.galleryKey;
 
+  // Step 6: Free trial
   const isActiveFreeTrial =
     user.isEnabledFreeTrial &&
     user.freeTrialExpiry &&
     new Date(user.freeTrialExpiry) > today;
 
+  // Final Response
   return {
     ...user,
     freeStorage: formattedFreeStorage,
     storageLimit,
     isActiveSubscription,
-    type: subscriptionType,          // ← client এ এটা ব্যবহার করবে
+    type: subscriptionType,           // 'core' | 'pro' | null
+    isProUser,                        // boolean - Pro user কিনা
+    subscription: activeSubscription ? {   // extra details
+      entitlement: activeSubscription.entitlement,
+      productId: activeSubscription.productId,
+      expiredAt: activeSubscription.expiredAt,
+      transactionId: activeSubscription.revenueCatTransactionId,
+    } : null,
     isGalleryLock,
     isActiveFreeTrial,
   };

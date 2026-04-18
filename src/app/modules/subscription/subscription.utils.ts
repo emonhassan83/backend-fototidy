@@ -4,6 +4,39 @@ import { findAdmin } from '../../utils/findAdmin'
 import { TPackage } from '../package/package.interface'
 import { sendNotification } from '../../utils/sentNotification'
 import { TUser } from '../user/user.interface'
+import config from '../../config'
+
+const APPLE_PRODUCTION_URL = 'https://buy.itunes.apple.com/verifyReceipt';
+const APPLE_SANDBOX_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
+
+export const validateWithApple = async (receiptData: string): Promise<any> => {
+  const body = {
+    'receipt-data': receiptData,
+    password: config.apple?.shared_secret || '',
+    'exclude-old-transactions': true,
+  };
+
+  let response = await fetch(APPLE_PRODUCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  let data = await response.json();
+
+  // Sandbox receipt হলে sandbox endpoint-এ retry
+  if (data.status === 21007) {
+    console.log('🔄 Sandbox receipt detected, retrying with sandbox...');
+    response = await fetch(APPLE_SANDBOX_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await response.json();
+  }
+
+  return data;
+};
 
 export const subscriptionNotifyToAdmin = async (
   action: 'ADDED',
