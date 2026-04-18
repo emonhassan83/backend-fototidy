@@ -17,15 +17,15 @@ import { Payment } from '../payments/payments.models'
 import { PAYMENT_STATUS } from '../payments/payments.constants'
 import { validateWithApple } from './subscription.utils'
 
-const getPlanDisplayName = (productId: string): string => {
+const getPlanDisplayName = (packageIdentifier: string): string => {
   const map: Record<string, string> = {
-    core: 'FOTOTIDY CORE (Monthly)',
-    core_year: 'FOTOTIDY CORE (Yearly)',
-    pro: 'FOTOTIDY PRO (Monthly)',
-    pro_year: 'FOTOTIDY PRO (Yearly)',
-  }
-  return map[productId] || productId
-}
+    core:      'Foto Tidy Core (Monthly)',
+    core_year: 'Foto Tidy Core (Yearly)',
+    pro:       'Foto Tidy Pro (Monthly)',
+    pro_year:  'Foto Tidy Pro (Yearly)',
+  };
+  return map[packageIdentifier] || packageIdentifier;
+};
 
 export const startSubscriptionCron = () => {
   cron.schedule('0 0 * * *', async () => {
@@ -144,164 +144,116 @@ export const startSubscriptionCron = () => {
 }
 
 const verifySubscription = async (payload: {
-  userId: string
-  packageId: string // Flutter থেকে আসবে: "core", "pro", "core_year", "pro_year"
-  receiptData: string
+  userId: string;
+  packageId: string;        // Flutter থেকে আসবে: "core_year"
+  receiptData: string;
 }) => {
-  const { userId, packageId, receiptData } = payload
+  const { userId, packageId, receiptData } = payload;
 
-  // ✅ Validate user
-  const user = await User.findById(userId)
+  const user = await User.findById(userId);
   if (!user || user.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
   if (!receiptData) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'Receipt data is required')
+    throw new AppError(httpStatus.BAD_REQUEST, 'Receipt data is required');
   }
 
-  console.log(
-    `🔍 Verifying Apple receipt for user: ${userId}, packageId: ${packageId}`,
-  )
+  console.log(`🔍 Verifying Apple receipt | User: ${userId} | Flutter packageId: ${packageId}`);
 
   try {
-    const appleResponse = await validateWithApple(receiptData)
-
-    console.log('Apple validation status:', appleResponse.status)
+    const appleResponse = await validateWithApple(receiptData);
 
     if (appleResponse.status !== 0) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        `Invalid receipt. Apple status: ${appleResponse.status}`,
-      )
+      throw new AppError(httpStatus.BAD_REQUEST, `Invalid receipt. Status: ${appleResponse.status}`);
     }
 
-    const latestReceipts: any[] = appleResponse.latest_receipt_info || []
+    const latestReceipts: any[] = appleResponse.latest_receipt_info || [];
     if (latestReceipts.length === 0) {
-      throw new AppError(
-        httpStatus.BAD_REQUEST,
-        'No subscription receipt found',
-      )
+      throw new AppError(httpStatus.BAD_REQUEST, 'No subscription receipt found');
     }
 
-    // Get latest receipt
-    latestReceipts.sort(
-      (a, b) => Number(b.expires_date_ms) - Number(a.expires_date_ms),
-    )
-    const latestReceipt = latestReceipts[0]
+    latestReceipts.sort((a, b) => Number(b.expires_date_ms) - Number(a.expires_date_ms));
+    const latestReceipt = latestReceipts[0];
 
-    const productId = latestReceipt.product_id
-    const expiresMs = Number(latestReceipt.expires_date_ms)
-    const expiredAt = new Date(expiresMs)
-    const transactionId =
-      latestReceipt.original_transaction_id || latestReceipt.transaction_id
-    const isActive = expiredAt > new Date()
+    const appleProductId = latestReceipt.product_id;        // Apple থেকে আসা → "core"
+    const expiresMs = Number(latestReceipt.expires_date_ms);
+    const expiredAt = new Date(expiresMs);
+    const transactionId = latestReceipt.original_transaction_id || latestReceipt.transaction_id;
 
-    console.log(
-      `✅ Apple receipt valid | Product: ${productId} | Expires: ${expiredAt} | Active: ${isActive}`,
-    )
+    const isActive = expiredAt > new Date();
+
+    console.log(`✅ Apple receipt valid | Apple Product: ${appleProductId} | Expires: ${expiredAt} | Active: ${isActive}`);
 
     if (!isActive) {
-      await Subscription.updateOne(
-        { user: userId },
-        { status: SUBSCRIPTION_STATUS.expired },
-      )
-      await User.findByIdAndUpdate(userId, { packageExpiry: null })
-
-      return {
-        active: false,
-        message: 'Subscription has expired',
-      }
+      await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
+      await User.findByIdAndUpdate(userId, { packageExpiry: null });
+      return { active: false, message: 'Subscription has expired' };
     }
 
-    // ==================== Database Update ====================
-    const session = await mongoose.startSession()
-    let subscription: any
+    const session = await mongoose.startSession();
+    let subscription: any;
 
     try {
       await session.withTransaction(async () => {
         const updateData: any = {
           user: userId,
-          entitlement: getPlanDisplayName(productId),
-          productId: productId, // Apple-এর product_id
-          packageIdentifier: packageId, // Flutter থেকে আসা string
+          entitlement: getPlanDisplayName(packageId),        // Flutter packageId দিয়ে নাম তৈরি
+          productId: appleProductId,                         // Apple থেকে আসা
+          packageIdentifier: packageId,                      // Flutter থেকে আসা (সবচেয়ে গুরুত্বপূর্ণ)
           status: SUBSCRIPTION_STATUS.active,
-          expiredAt,
+          expiredAt,                                         // ← এটাই সঠিক expiry
           transactionId,
           receiptData,
-        }
+        };
 
-        // Only set package if it's a valid MongoDB ObjectId
         if (packageId && mongoose.Types.ObjectId.isValid(packageId)) {
-          updateData.package = packageId
-          console.log(`✅ Valid Package ObjectId linked: ${packageId}`)
-        } else {
-          console.log(
-            `⚠️ packageId "${packageId}" is not ObjectId, saved as packageIdentifier`,
-          )
+          updateData.package = packageId;
         }
 
         subscription = await Subscription.findOneAndUpdate(
           { user: userId },
           updateData,
-          { upsert: true, new: true, session },
-        )
+          { upsert: true, new: true, session }
+        );
 
-        // Payment Record (idempotent)
-        const existingPayment = await Payment.findOne({
-          transactionId,
-        }).session(session)
+        // Payment
+        const existingPayment = await Payment.findOne({ transactionId }).session(session);
         if (!existingPayment) {
-          await Payment.create(
-            [{
-              user: userId,
-              subscription: subscription._id,
-              transactionId,
-              revenueCatProductId: productId,     // reuse field for now
-              amount: 0,
-              currency: 'USD',
-              status: PAYMENT_STATUS.paid,
-              purchasedAt: new Date(Number(latestReceipt.purchase_date_ms)),
-              rawReceiptData: latestReceipt,
-              // Do NOT send revenueCatEventType — it will use default
-            }],
-            { session }
-          );
-          console.log(`💰 Payment recorded for product: ${productId}`);
+          await Payment.create([{
+            user: userId,
+            subscription: subscription._id,
+            transactionId,
+            revenueCatProductId: appleProductId,
+            amount: 0,
+            currency: 'USD',
+            status: PAYMENT_STATUS.paid,
+            purchasedAt: new Date(Number(latestReceipt.purchase_date_ms)),
+            rawReceiptData: latestReceipt,
+          }], { session });
         }
 
-        // Update user package expiry
-        await User.findByIdAndUpdate(
-          userId,
-          { packageExpiry: expiredAt },
-          { session },
-        )
-      })
+        await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt }, { session });
+      });
     } finally {
-      session.endSession()
+      session.endSession();
     }
 
-    console.log(
-      `✅ Subscription verified successfully for user: ${userId} | Product: ${productId}`,
-    )
+    console.log(`✅ Subscription verified | Final packageIdentifier: ${packageId} | expiredAt: ${expiredAt}`);
 
     return {
       active: true,
       subscription,
       expiredAt,
-      productId,
+      productId: packageId,   // Flutter-এর packageId ফেরত দাও
       message: 'Subscription verified successfully',
-    }
+    };
+
   } catch (error: any) {
-    console.error('Apple Verify Error:', error)
-    throw error instanceof AppError
-      ? error
-      : new AppError(
-          httpStatus.INTERNAL_SERVER_ERROR,
-          'Failed to verify subscription',
-        )
+    console.error('Apple Verify Error:', error);
+    throw error instanceof AppError ? error : new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Failed to verify subscription');
   }
-}
+};
 
 const restoreSubscription = async (payload: {
   userId: string

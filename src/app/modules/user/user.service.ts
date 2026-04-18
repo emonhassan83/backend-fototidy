@@ -105,30 +105,19 @@ const getAllUsersFromDB = async (query: Record<string, unknown>) => {
 }
 
 const geUserByIdFromDB = async (id: string) => {
-  // Step 1: Find the user with necessary fields
   const user = await User.findOne({ _id: id })
-    .select(
-      '_id id name email photoUrl contractNumber freeStorage status isActiveLock isEnabledFreeTrial freeTrialExpiry createdAt galleryKey isDeactivateLock',
-    )
+    .select('_id id name email photoUrl contractNumber freeStorage status isActiveLock isEnabledFreeTrial freeTrialExpiry createdAt galleryKey isDeactivateLock packageExpiry')
     .lean();
 
   if (!user || user.isDeleted) {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
-  // Step 2: Fetch global free storage limit from Contents
-  const content = await Contents.findOne({ isDeleted: false })
-    .select('freeStorage')
-    .lean();
-
+  const content = await Contents.findOne({ isDeleted: false }).select('freeStorage').lean();
   const storageLimit = content?.freeStorage ?? 0;
 
-  // Step 3: Format freeStorage to 1 decimal place
-  const formattedFreeStorage = user.freeStorage
-    ? Number(user.freeStorage.toFixed(1))
-    : 0;
+  const formattedFreeStorage = user.freeStorage ? Number(user.freeStorage.toFixed(1)) : 0;
 
-  // Step 4: Check active subscription
   const today = new Date();
   const activeSubscription = await Subscription.findOne({
     user: id,
@@ -136,67 +125,41 @@ const geUserByIdFromDB = async (id: string) => {
     isDeleted: false,
     expiredAt: { $gt: today },
   })
-    .select('entitlement productId packageIdentifier expiredAt transactionId')
+    .select('entitlement productId packageIdentifier expiredAt')
     .lean();
 
   const isActiveSubscription = !!activeSubscription;
 
-  // ✅ Determine subscription type based on productId or packageIdentifier
   let subscriptionType: 'core' | 'pro' | null = null;
   let isProUser = false;
 
   if (activeSubscription) {
-    const prodId = (
-      activeSubscription.productId ||
-      activeSubscription.packageIdentifier ||
-      activeSubscription.entitlement ||
-      ''
-    )
-      .toString()
-      .toLowerCase()
-      .trim();
+    const identifier = (activeSubscription.packageIdentifier || activeSubscription.productId || '').toLowerCase().trim();
 
-    if (prodId === 'pro' || prodId === 'pro_year') {
+    if (identifier === 'pro' || identifier === 'pro_year') {
       subscriptionType = 'pro';
       isProUser = true;
-    } else if (prodId === 'core' || prodId === 'core_year') {
-      subscriptionType = 'core';
-    } 
-    // Fallback: entitlement name check
-    else if (activeSubscription.entitlement?.toLowerCase().includes('pro')) {
-      subscriptionType = 'pro';
-      isProUser = true;
-    } else if (activeSubscription.entitlement?.toLowerCase().includes('core')) {
+    } else if (identifier === 'core' || identifier === 'core_year') {
       subscriptionType = 'core';
     }
   }
 
-  // Step 5: Gallery lock
   const isGalleryLock = !!user.galleryKey;
+  const isActiveFreeTrial = user.isEnabledFreeTrial && user.freeTrialExpiry && new Date(user.freeTrialExpiry) > today;
 
-  // Step 6: Free trial
-  const isActiveFreeTrial =
-    user.isEnabledFreeTrial &&
-    user.freeTrialExpiry &&
-    new Date(user.freeTrialExpiry) > today;
-
-  // Final Response
   return {
     ...user,
     freeStorage: formattedFreeStorage,
     storageLimit,
     isActiveSubscription,
-    type: subscriptionType,           // 'core' | 'pro' | null
-    isProUser,                        // boolean - Pro features unlock করার জন্য
-    subscription: activeSubscription
-      ? {
-          entitlement: activeSubscription.entitlement,
-          productId: activeSubscription.productId,
-          packageIdentifier: activeSubscription.packageIdentifier,
-          expiredAt: activeSubscription.expiredAt,
-          transactionId: activeSubscription.transactionId,
-        }
-      : null,
+    type: subscriptionType,
+    isProUser,
+    subscription: activeSubscription ? {
+      entitlement: activeSubscription.entitlement,
+      productId: activeSubscription.productId,
+      packageIdentifier: activeSubscription.packageIdentifier,
+      expiredAt: activeSubscription.expiredAt,
+    } : null,
     isGalleryLock,
     isActiveFreeTrial,
   };
