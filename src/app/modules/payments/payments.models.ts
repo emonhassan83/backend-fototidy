@@ -21,7 +21,7 @@ const paymentSchema = new Schema<TPayment>(
     revenueCatEventType: { 
       type: String, 
       enum: ['INITIAL_PURCHASE', 'RENEWAL', 'CANCELLATION', 'EXPIRATION', 'REFUND'],
-      required: true 
+      required: false 
     },
     revenueCatProductId: { type: String },
     revenueCatTransactionId: { 
