@@ -1,7 +1,7 @@
 import { model, Schema } from 'mongoose'
 import { TSubscriptions, TSubscriptionsModel } from './subscription.interface'
-import { SUBSCRIPTION_STATUS } from './subscription.constants'
 
+// subscription.model.ts
 const subscriptionsSchema = new Schema<TSubscriptions>(
   {
     user: { 
@@ -11,29 +11,29 @@ const subscriptionsSchema = new Schema<TSubscriptions>(
       index: true,
     },
 
-    // ==================== Apple IAP Fields ====================
+    // RevenueCat Core Fields
+    revenueCatAppUserId: { 
+      type: String, 
+      required: true,
+      index: true,
+    },
     entitlement: { 
       type: String, 
       required: true,
-      index: true,                    // entitlement name search-এর জন্য
+      index: true,
     },
     productId: { 
       type: String, 
       index: true,                    // "core", "pro", "core_year", "pro_year"
     },
-    packageIdentifier: { 
-      type: String, 
-      index: true,                    // Flutter থেকে আসা string identifier
-    },
 
-    // Package reference (যদি তোমার আলাদা Package collection থাকে)
+    // Optional fields
     package: { 
       type: Schema.Types.ObjectId, 
       ref: 'Package',
-      required: false,                // optional — কারণ Flutter string পাঠায়
+      required: false,
     },
 
-    // Status & Expiry
     status: {
       type: String,
       enum: ['active', 'expired', 'cancelled', 'grace_period'],
@@ -42,26 +42,10 @@ const subscriptionsSchema = new Schema<TSubscriptions>(
     },
     expiredAt: { 
       type: Date,
-      index: true,                    // expiry query-এর জন্য খুব জরুরি
-    },
-
-    // Transaction Info
-    transactionId: { 
-      type: String,
-      index: true,                    // Apple transaction ID
-    },
-    receiptData: { 
-      type: String,                   // Apple receipt (base64) — debugging & future use
-    },
-
-    // Old RevenueCat fields (optional রাখা হয়েছে migration-এর জন্য)
-    revenueCatAppUserId: { 
-      type: String,
       index: true,
     },
-    revenueCatTransactionId: { 
-      type: String 
-    },
+
+    revenueCatTransactionId: { type: String, index: true },
 
     isDeleted: { 
       type: Boolean, 
@@ -70,15 +54,11 @@ const subscriptionsSchema = new Schema<TSubscriptions>(
     },
   },
   {
-    timestamps: true,                 // createdAt, updatedAt
+    timestamps: true,
   }
 );
 
-// Compound index for user subscription lookup
-subscriptionsSchema.index({ user: 1, status: 1 });
+// Compound Index
+subscriptionsSchema.index({ user: 1, status: 1, expiredAt: 1 });
 
-// Create and export the model
-export const Subscription = model<TSubscriptions, TSubscriptionsModel>(
-  'Subscription',
-  subscriptionsSchema,
-)
+export const Subscription = model<TSubscriptions, TSubscriptionsModel>('Subscription', subscriptionsSchema);

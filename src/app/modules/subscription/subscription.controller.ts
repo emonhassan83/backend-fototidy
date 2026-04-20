@@ -15,16 +15,16 @@ const verifySubscription = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
-const restoreSubscription = catchAsync(async (req: Request, res: Response) => {
-  const result = await subscriptionService.restoreSubscription(req.body);
+// const restoreSubscription = catchAsync(async (req: Request, res: Response) => {
+//   const result = await subscriptionService.restoreSubscription(req.body);
 
-  sendResponse(res, {
-    success: true,
-    statusCode: 200,
-    message: 'Subscription verified & recorded successfully',
-    data: result,
-  });
-});
+//   sendResponse(res, {
+//     success: true,
+//     statusCode: 200,
+//     message: 'Subscription verified & recorded successfully',
+//     data: result,
+//   });
+// });
 
 const handleAppleServerNotification = catchAsync(async (req: Request, res: Response) => {
   const result = await subscriptionService.handleAppleWebhook(req.body);
@@ -96,7 +96,6 @@ const deleteSubscription = catchAsync(async (req: Request, res: Response) => {
 
 export const subscriptionController = {
   verifySubscription,
-  restoreSubscription,
   handleAppleServerNotification,
   getAllSubscription,
   getSubscriptionById,

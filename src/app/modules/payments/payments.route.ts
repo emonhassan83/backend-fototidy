@@ -5,7 +5,7 @@ import { USER_ROLE } from '../user/user.constant'
 
 const router = Router()
 
-// router.post('/webhooks/revenuecat', paymentsController.revenueCatWebhook)
+router.post('/webhooks/revenuecat', paymentsController.revenueCatWebhook)
 
 router.get(
   '/dashboard-data',

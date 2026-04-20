@@ -8,22 +8,24 @@ import { Payment } from './payments.models'
 import { PAYMENT_STATUS } from './payments.constants'
 import { notifyUserAboutSubscriptionChange } from './payments.utils'
 
+// ====================== RevenueCat Webhook Handler ======================
 const handleRevenueCatWebhook = async (event: any) => {
   console.log(`📥 RevenueCat Webhook: ${event.type} | User: ${event.app_user_id}`);
 
-  // ==================== DEBUG LOG (খুব জরুরি) ====================
+  // Full payload debug (খুব জরুরি)
   console.log('=== FULL WEBHOOK PAYLOAD ===');
   console.log(JSON.stringify(event, null, 2));
 
   const userId = event.app_user_id;
   const eventType = event.type as string;
-  const productId = event.product_id;                    // ← core / pro / core_year / pro_year
+  const productId = event.product_id;                    // "core", "pro_year" ইত্যাদি
   const entitlementIds = event.entitlement_ids || [];
   const entitlement = entitlementIds[0] || 'Foto Tidy Pro';
   const expiredAt = event.expiration_at_ms ? new Date(event.expiration_at_ms) : null;
 
   if (!userId || !eventType) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'Invalid webhook payload');
+    console.warn('Invalid webhook payload - missing userId or eventType');
+    return { success: false, message: 'Invalid payload' };
   }
 
   const MAX_RETRIES = 3;
@@ -42,7 +44,7 @@ const handleRevenueCatWebhook = async (event: any) => {
 
         if (subscription) {
           subscription.entitlement = entitlement;
-          subscription.productId = productId || subscription.productId;   // ← সবচেয়ে গুরুত্বপূর্ণ
+          subscription.productId = productId || subscription.productId;
           subscription.status = isTerminalEvent ? 'expired' : 'active';
           if (expiredAt) subscription.expiredAt = expiredAt;
           subscription.revenueCatTransactionId = event.original_transaction_id || event.transaction_id;
@@ -52,14 +54,14 @@ const handleRevenueCatWebhook = async (event: any) => {
             user: userId,
             revenueCatAppUserId: userId,
             entitlement,
-            productId: productId,                    // ← এখানে সেভ হবে
+            productId: productId,
             status: isTerminalEvent ? 'expired' : 'active',
             expiredAt,
             revenueCatTransactionId: event.original_transaction_id || event.transaction_id,
           }], { session });
         }
 
-        // Payment Record
+        // ====================== Payment Record ======================
         if (['INITIAL_PURCHASE', 'RENEWAL'].includes(eventType) && productId) {
           const transactionId = event.original_transaction_id || event.transaction_id;
 
@@ -83,7 +85,7 @@ const handleRevenueCatWebhook = async (event: any) => {
           }
         }
 
-        // Update User packageExpiry
+        // ====================== Update User Expiry ======================
         if (expiredAt && !isTerminalEvent) {
           await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt }, { session });
         } else if (isTerminalEvent) {
@@ -91,23 +93,32 @@ const handleRevenueCatWebhook = async (event: any) => {
         }
       });
 
-      console.log(`✅ Webhook processed: ${eventType} | Product: ${productId} | User: ${userId}`);
+      console.log(`✅ Webhook processed successfully: ${eventType} | Product: ${productId} | User: ${userId}`);
+
+      // ====================== Send Notification ======================
+      await notifyUserAboutSubscriptionChange(
+        userId,
+        eventType,
+        expiredAt
+      );
+
       return { success: true, eventType, userId, productId };
 
     } catch (error: any) {
       lastError = error;
       await session.abortTransaction();
 
-      const isRetryable = error.code === 112 || error.hasErrorLabel?.('TransientTransactionError') ||
+      const isRetryable = error.code === 112 || 
+                         error.hasErrorLabel?.('TransientTransactionError') ||
                          error.message?.includes('WriteConflict');
 
       if (isRetryable && attempt < MAX_RETRIES) {
-        console.warn(`⚠️ Retry attempt ${attempt} for ${eventType}`);
-        await new Promise(resolve => setTimeout(resolve, 100 * attempt));
+        console.warn(`⚠️ WriteConflict on attempt ${attempt} for ${eventType}. Retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 150 * attempt));
         continue;
       }
 
-      console.error(`❌ Webhook Error (${eventType}):`, error);
+      console.error(`❌ Webhook Error (${eventType}) after ${attempt} attempts:`, error);
       throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Webhook processing failed');
     } finally {
       session.endSession();
