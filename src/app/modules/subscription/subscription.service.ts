@@ -176,7 +176,7 @@ const verifySubscription = async (payload: {
     }
 
     const data = await response.json();
-    console.log('RevenueCat V1 Response:', JSON.stringify(data, null, 2));
+    console.log('RevenueCat V1 Full Response:', JSON.stringify(data, null, 2));
 
     const subscriber = data.subscriber;
 
@@ -186,45 +186,74 @@ const verifySubscription = async (payload: {
       return { active: false, message: 'No active subscription found' };
     }
 
-    // Get first active entitlement
-    const entitlements = subscriber.entitlements;
-    const activeKey = Object.keys(entitlements).find(key => {
-      const ent = entitlements[key];
-      return ent.expires_date && new Date(ent.expires_date) > new Date();
-    });
+    // ==================== FIXED: Find Best Active Subscription ====================
+    let bestExpiredAt: Date = new Date(0);
+    let bestProductId: string = '';
+    let bestEntitlementKey: string = 'Foto Tidy Pro';
 
-    if (!activeKey) {
-      return { active: false, message: 'No currently active entitlement' };
+    // 1. Check Entitlements
+    for (const [key, ent] of Object.entries<any>(subscriber.entitlements)) {
+      if (ent.expires_date) {
+        const expDate = new Date(ent.expires_date);
+        if (expDate > bestExpiredAt) {
+          bestExpiredAt = expDate;
+          bestProductId = ent.product_identifier || ent.product_id || '';
+          bestEntitlementKey = key;
+        }
+      }
     }
 
-    const activeEnt = entitlements[activeKey];
-    const expiredAt = new Date(activeEnt.expires_date);
-    const productId = activeEnt.product_identifier || activeEnt.product_id;
+    // 2. Check Subscriptions (more accurate for yearly/monthly)
+    if (subscriber.subscriptions) {
+      for (const [subKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
+        if (sub.expires_date) {
+          const expDate = new Date(sub.expires_date);
+          if (expDate > bestExpiredAt) {
+            bestExpiredAt = expDate;
+            bestProductId = subKey;                    // "core", "core_year", "pro", "pro_year"
+            bestEntitlementKey = bestEntitlementKey || "Foto Tidy Pro";
+          }
+        }
+      }
+    }
 
-    console.log(`✅ Active: ${activeKey} | Product: ${productId} | Expires: ${expiredAt}`);
+    const expiredAt = bestExpiredAt;
+    const productId = bestProductId || 'core';   // fallback
+    const isActive = expiredAt > new Date();
 
+    console.log(`✅ Best Active Subscription → Product: ${productId} | Expires: ${expiredAt} | Active: ${isActive}`);
+
+    if (!isActive) {
+      await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
+      await User.findByIdAndUpdate(userId, { packageExpiry: null });
+      return { active: false, message: 'Subscription has expired' };
+    }
+
+    // Save to Database
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
         user: userId,
         revenueCatAppUserId: userId,
-        entitlement: activeKey,
-        productId: productId,
+        entitlement: bestEntitlementKey,
+        productId: productId,                    // সঠিক productId ("core_year")
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
-        revenueCatTransactionId: subscriber.original_transaction_id || activeEnt.original_transaction_id,
+        revenueCatTransactionId: subscriber.original_transaction_id,
       },
       { upsert: true, new: true }
     );
 
     await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt });
 
+    console.log(`✅ Subscription saved successfully | Product: ${productId} | Expiry: ${expiredAt}`);
+
     return {
       active: true,
       subscription,
       expiredAt,
       productId,
-      entitlement: activeKey,
+      entitlement: bestEntitlementKey,
       message: 'Subscription verified successfully (V1)',
     };
 

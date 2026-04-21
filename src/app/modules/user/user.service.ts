@@ -125,7 +125,7 @@ const geUserByIdFromDB = async (id: string) => {
     isDeleted: false,
     expiredAt: { $gt: today },
   })
-    .select('entitlement productId packageIdentifier expiredAt')
+    .select('entitlement productId expiredAt')
     .lean();
 
   const isActiveSubscription = !!activeSubscription;
@@ -134,7 +134,7 @@ const geUserByIdFromDB = async (id: string) => {
   let isProUser = false;
 
   if (activeSubscription) {
-    const identifier = (activeSubscription.packageIdentifier || activeSubscription.productId || '').toLowerCase().trim();
+    const identifier = (activeSubscription.productId || '').toLowerCase().trim();
 
     if (identifier === 'pro' || identifier === 'pro_year') {
       subscriptionType = 'pro';
@@ -145,7 +145,10 @@ const geUserByIdFromDB = async (id: string) => {
   }
 
   const isGalleryLock = !!user.galleryKey;
-  const isActiveFreeTrial = user.isEnabledFreeTrial && user.freeTrialExpiry && new Date(user.freeTrialExpiry) > today;
+  const isActiveFreeTrial = 
+    user.isEnabledFreeTrial && 
+    user.freeTrialExpiry && 
+    new Date(user.freeTrialExpiry) > today;
 
   return {
     ...user,
@@ -157,7 +160,6 @@ const geUserByIdFromDB = async (id: string) => {
     subscription: activeSubscription ? {
       entitlement: activeSubscription.entitlement,
       productId: activeSubscription.productId,
-      packageIdentifier: activeSubscription.packageIdentifier,
       expiredAt: activeSubscription.expiredAt,
     } : null,
     isGalleryLock,
