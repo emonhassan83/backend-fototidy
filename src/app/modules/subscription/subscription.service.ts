@@ -165,63 +165,37 @@ const verifySubscription = async (payload: {
       }
     );
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ RevenueCat V1 Error: ${response.status} - ${errorText}`);
-      
-      if (response.status === 404) {
-        throw new AppError(httpStatus.NOT_FOUND, 'Subscriber not found in RevenueCat');
-      }
-      throw new AppError(httpStatus.BAD_GATEWAY, `RevenueCat V1 failed: ${response.status}`);
-    }
+    if (!response.ok) throw new AppError(httpStatus.BAD_GATEWAY, 'RevenueCat V1 failed');
 
     const data = await response.json();
-    console.log('RevenueCat V1 Full Response:', JSON.stringify(data, null, 2));
-
     const subscriber = data.subscriber;
 
-    if (!subscriber?.entitlements || Object.keys(subscriber.entitlements).length === 0) {
+    if (!subscriber?.subscriptions) {
       await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
       await User.findByIdAndUpdate(userId, { packageExpiry: null });
       return { active: false, message: 'No active subscription found' };
     }
 
-    // ==================== FIXED: Find Best Active Subscription ====================
-    let bestExpiredAt: Date = new Date(0);
-    let bestProductId: string = '';
-    let bestEntitlementKey: string = 'Foto Tidy Pro';
+    let bestExpiredAt = new Date(0);
+    let bestProductId = 'core';
+    let bestEntitlementKey = 'Foto Tidy Pro';
 
-    // 1. Check Entitlements
-    for (const [key, ent] of Object.entries<any>(subscriber.entitlements)) {
-      if (ent.expires_date) {
-        const expDate = new Date(ent.expires_date);
+    // সবচেয়ে গুরুত্বপূর্ণ লজিক: subscriptions অবজেক্ট থেকে সবচেয়ে দূরের expiry নাও
+    for (const [productKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
+      if (sub.expires_date) {
+        const expDate = new Date(sub.expires_date);
         if (expDate > bestExpiredAt) {
           bestExpiredAt = expDate;
-          bestProductId = ent.product_identifier || ent.product_id || '';
-          bestEntitlementKey = key;
-        }
-      }
-    }
-
-    // 2. Check Subscriptions (more accurate for yearly/monthly)
-    if (subscriber.subscriptions) {
-      for (const [subKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
-        if (sub.expires_date) {
-          const expDate = new Date(sub.expires_date);
-          if (expDate > bestExpiredAt) {
-            bestExpiredAt = expDate;
-            bestProductId = subKey;                    // "core", "core_year", "pro", "pro_year"
-            bestEntitlementKey = bestEntitlementKey || "Foto Tidy Pro";
-          }
+          bestProductId = productKey;           // core_year, pro_year ইত্যাদি আসবে
+          bestEntitlementKey = "Foto Tidy Pro";
         }
       }
     }
 
     const expiredAt = bestExpiredAt;
-    const productId = bestProductId || 'core';   // fallback
     const isActive = expiredAt > new Date();
 
-    console.log(`✅ Best Active Subscription → Product: ${productId} | Expires: ${expiredAt} | Active: ${isActive}`);
+    console.log(`✅ FINAL Best Subscription → Product: ${bestProductId} | Expires: ${expiredAt} | Active: ${isActive}`);
 
     if (!isActive) {
       await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
@@ -229,14 +203,13 @@ const verifySubscription = async (payload: {
       return { active: false, message: 'Subscription has expired' };
     }
 
-    // Save to Database
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
         user: userId,
         revenueCatAppUserId: userId,
         entitlement: bestEntitlementKey,
-        productId: productId,                    // সঠিক productId ("core_year")
+        productId: bestProductId,
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
         revenueCatTransactionId: subscriber.original_transaction_id,
@@ -246,14 +219,11 @@ const verifySubscription = async (payload: {
 
     await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt });
 
-    console.log(`✅ Subscription saved successfully | Product: ${productId} | Expiry: ${expiredAt}`);
-
     return {
       active: true,
       subscription,
       expiredAt,
-      productId,
-      entitlement: bestEntitlementKey,
+      productId: bestProductId,
       message: 'Subscription verified successfully (V1)',
     };
 
