@@ -165,7 +165,9 @@ const verifySubscription = async (payload: {
       }
     );
 
-    if (!response.ok) throw new AppError(httpStatus.BAD_GATEWAY, 'RevenueCat V1 failed');
+    if (!response.ok) {
+      throw new AppError(httpStatus.BAD_GATEWAY, `RevenueCat V1 failed: ${response.status}`);
+    }
 
     const data = await response.json();
     const subscriber = data.subscriber;
@@ -176,18 +178,17 @@ const verifySubscription = async (payload: {
       return { active: false, message: 'No active subscription found' };
     }
 
+    // ==================== BEST LOGIC ====================
     let bestExpiredAt = new Date(0);
-    let bestProductId = 'core';
-    let bestEntitlementKey = 'Foto Tidy Pro';
+    let bestProductId = '';
 
-    // সবচেয়ে গুরুত্বপূর্ণ লজিক: subscriptions অবজেক্ট থেকে সবচেয়ে দূরের expiry নাও
+    // subscriptions অবজেক্ট থেকে সবচেয়ে দূরের expiry খুঁজি
     for (const [productKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
       if (sub.expires_date) {
         const expDate = new Date(sub.expires_date);
         if (expDate > bestExpiredAt) {
           bestExpiredAt = expDate;
-          bestProductId = productKey;           // core_year, pro_year ইত্যাদি আসবে
-          bestEntitlementKey = "Foto Tidy Pro";
+          bestProductId = productKey;   // "core_year", "pro_year" আসবে
         }
       }
     }
@@ -195,20 +196,21 @@ const verifySubscription = async (payload: {
     const expiredAt = bestExpiredAt;
     const isActive = expiredAt > new Date();
 
-    console.log(`✅ FINAL Best Subscription → Product: ${bestProductId} | Expires: ${expiredAt} | Active: ${isActive}`);
+    console.log(`✅ FINAL Best Product: ${bestProductId} | Expires: ${expiredAt} | Active: ${isActive}`);
 
-    if (!isActive) {
+    if (!isActive || !bestProductId) {
       await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
       await User.findByIdAndUpdate(userId, { packageExpiry: null });
       return { active: false, message: 'Subscription has expired' };
     }
 
+    // Save to DB
     const subscription = await Subscription.findOneAndUpdate(
       { user: userId },
       {
         user: userId,
         revenueCatAppUserId: userId,
-        entitlement: bestEntitlementKey,
+        entitlement: "Foto Tidy Pro",
         productId: bestProductId,
         status: SUBSCRIPTION_STATUS.active,
         expiredAt,
@@ -224,7 +226,7 @@ const verifySubscription = async (payload: {
       subscription,
       expiredAt,
       productId: bestProductId,
-      message: 'Subscription verified successfully (V1)',
+      message: 'Subscription verified successfully',
     };
 
   } catch (error: any) {
