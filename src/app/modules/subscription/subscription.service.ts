@@ -140,10 +140,8 @@ export const startSubscriptionCron = () => {
   })
 }
 
-const verifySubscription = async (payload: {
-  userId: string;
-  packageId?: string;
-}) => {
+// ==================== VERIFY SUBSCRIPTION ====================
+const verifySubscription = async (payload: { userId: string; packageId?: string }) => {
   const { userId } = payload;
 
   const user = await User.findById(userId);
@@ -172,23 +170,32 @@ const verifySubscription = async (payload: {
     const data = await response.json();
     const subscriber = data.subscriber;
 
-    if (!subscriber?.subscriptions) {
-      await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
-      await User.findByIdAndUpdate(userId, { packageExpiry: null });
-      return { active: false, message: 'No active subscription found' };
-    }
-
     // ==================== BEST LOGIC ====================
     let bestExpiredAt = new Date(0);
     let bestProductId = '';
 
-    // subscriptions অবজেক্ট থেকে সবচেয়ে দূরের expiry খুঁজি
-    for (const [productKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
-      if (sub.expires_date) {
-        const expDate = new Date(sub.expires_date);
-        if (expDate > bestExpiredAt) {
-          bestExpiredAt = expDate;
-          bestProductId = productKey;   // "core_year", "pro_year" আসবে
+    // 1️⃣ প্রথমে entitlement লেভেল থেকে active subscription খুঁজি
+    if (subscriber?.entitlements) {
+      for (const [entKey, ent] of Object.entries<any>(subscriber.entitlements)) {
+        if (ent.expires_date) {
+          const expDate = new Date(ent.expires_date);
+          if (expDate > bestExpiredAt) {
+            bestExpiredAt = expDate;
+            bestProductId = ent.product_identifier; // এখানে "core_year", "pro_year", "core" আসবে
+          }
+        }
+      }
+    }
+
+    // 2️⃣ fallback: যদি entitlement না থাকে, subscriptions থেকে খুঁজি
+    if (!bestProductId && subscriber?.subscriptions) {
+      for (const [productKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
+        if (sub.expires_date) {
+          const expDate = new Date(sub.expires_date);
+          if (expDate > bestExpiredAt) {
+            bestExpiredAt = expDate;
+            bestProductId = productKey;
+          }
         }
       }
     }
