@@ -25,7 +25,7 @@ router.delete(
 
 router.patch(
   '/cancelled',
-  auth(USER_ROLE.user),
+  auth(USER_ROLE.user, USER_ROLE.admin),
   subscriptionController.chancelSubscription,
 )
 
