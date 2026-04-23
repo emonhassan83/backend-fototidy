@@ -394,54 +394,35 @@ const getSubscriptionById = async (id: string) => {
 }
 
 const chancelSubscriptionFromDB = async (userId: string) => {
-  const user = await User.findById(userId)
+  const user = await User.findById(userId);
   if (!user || user?.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
   const subscription = await Subscription.findOne({
     user: userId,
     status: 'active',
     isDeleted: false,
-  })
+  });
 
   if (!subscription) {
-    throw new AppError(httpStatus.NOT_FOUND, 'Active subscription not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'Active subscription not found!');
   }
 
-  // ✅ RevenueCat API দিয়ে cancel করো
-  // RevenueCat cancel করলে CANCELLATION webhook আসবে
-  // webhook এ automatically status update হবে
-  try {
-    await axios.post(
-      `https://api.revenuecat.com/v1/subscribers/${subscription.revenueCatAppUserId}/subscriptions/${subscription.productId}/revoke`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${config.revenue_cat.secret_key}`,
-          'Content-Type': 'application/json',
-        },
-      },
-    )
-  } catch (error: any) {
-    console.error('RevenueCat cancel error:', error.response?.data)
-    throw new AppError(
-      httpStatus.BAD_REQUEST,
-      'Failed to cancel subscription in RevenueCat',
-    )
-  }
-
-  // ✅ Local DB তে immediately update করো
-  // Webhook আসতে delay হতে পারে
+  // ✅ সবসময় local DB তে cancel mark করো
   await Subscription.updateOne(
     { _id: subscription._id },
     { status: 'cancelled', expiredAt: null },
-  )
+  );
 
-  await User.updateOne({ _id: userId }, { packageExpiry: null })
+  await User.updateOne({ _id: userId }, { packageExpiry: null });
 
-  return { success: true, message: 'Subscription cancelled successfully' }
-}
+  return {
+    success: true,
+    message: 'Subscription cancelled in our system. Please also cancel from your App Store / Play Store account settings.',
+  };
+};
+
 
 const deleteSubscription = async (id: string) => {
   const subscription = await Subscription.findById(id)
