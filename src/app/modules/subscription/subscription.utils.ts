@@ -12,6 +12,9 @@ import * as appleReceiptVerify from 'node-apple-receipt-verify'
 appleReceiptVerify.config({
   secret: config.apple.shared_secret!, // App Store Connect থেকে নাও
   environment: ['production', 'sandbox'], // প্রথমে production, fallback sandbox
+  verbose: true,        // Debugging logs
+  extended: true,       // Extra subscription info
+  ignoreExpired: false, // Expired subscriptions retain
   excludeOldTransactions: true,
 })
 
