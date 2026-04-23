@@ -24,7 +24,7 @@ router.delete(
 )
 
 router.patch(
-  '/cancelled/:id',
+  '/cancelled',
   auth(USER_ROLE.user),
   subscriptionController.chancelSubscription,
 )

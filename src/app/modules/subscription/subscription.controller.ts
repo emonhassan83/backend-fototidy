@@ -73,7 +73,7 @@ const getSubscriptionById = catchAsync(async (req: Request, res: Response) => {
 })
 
 const chancelSubscription = catchAsync(async (req, res) => {
-  const result = await subscriptionService.chancelSubscriptionFromDB(req.params.id)
+  const result = await subscriptionService.chancelSubscriptionFromDB(req.user._id)
 
   sendResponse(res, {
     success: true,
