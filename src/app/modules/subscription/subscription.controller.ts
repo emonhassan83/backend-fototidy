@@ -5,7 +5,7 @@ import sendResponse from '../../utils/sendResponse'
 import { SUBSCRIPTION_STATUS } from './subscription.constants';
 
 const verifySubscription = catchAsync(async (req: Request, res: Response) => {
-  const result = await subscriptionService.verifyAndSaveSubscription(req.user._id, req.body);
+  const result = await subscriptionService.verifyAndSaveSubscription(req.user._id, req.body.receiptData);
 
   sendResponse(res, {
     success: true,
