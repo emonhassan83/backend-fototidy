@@ -12,7 +12,7 @@ export interface TSubscriptions {
   transactionId: string;
   receiptData: string
   status: 'active' | 'expired' | 'cancelled' | 'grace_period';
-  expiredAt?: Date;
+  expiredAt?: Date | null;
   isDeleted?: boolean;
   createdAt?: Date;
   updatedAt?: Date;

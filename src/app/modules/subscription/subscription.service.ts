@@ -13,6 +13,7 @@ import { sendNotification } from '../../utils/sentNotification'
 import emailSender from '../../utils/emailSender'
 import config from '../../config'
 import mongoose from 'mongoose'
+import axios from 'axios'
 
 const getPlanDisplayName = (packageIdentifier: string): string => {
   const map: Record<string, string> = {
@@ -393,26 +394,53 @@ const getSubscriptionById = async (id: string) => {
 }
 
 const chancelSubscriptionFromDB = async (userId: string) => {
-  //* if the user is is not exist
   const user = await User.findById(userId)
   if (!user || user?.isDeleted) {
     throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
   }
 
-  const result = await Subscription.updateOne(
-    { user: userId },
-    { status: SUBSCRIPTION_STATUS.cancelled, expiredAt: null },
-  )
-  if (!result) {
+  const subscription = await Subscription.findOne({
+    user: userId,
+    status: 'active',
+    isDeleted: false,
+  })
+
+  if (!subscription) {
+    throw new AppError(httpStatus.NOT_FOUND, 'Active subscription not found!')
+  }
+
+  // ✅ RevenueCat API দিয়ে cancel করো
+  // RevenueCat cancel করলে CANCELLATION webhook আসবে
+  // webhook এ automatically status update হবে
+  try {
+    await axios.post(
+      `https://api.revenuecat.com/v1/subscribers/${subscription.revenueCatAppUserId}/subscriptions/${subscription.productId}/revoke`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${config.revenue_cat.secret_key}`,
+          'Content-Type': 'application/json',
+        },
+      },
+    )
+  } catch (error: any) {
+    console.error('RevenueCat cancel error:', error.response?.data)
     throw new AppError(
-      httpStatus.NOT_FOUND,
-      'Subscription not found and failed to update cancellation status!',
+      httpStatus.BAD_REQUEST,
+      'Failed to cancel subscription in RevenueCat',
     )
   }
 
-  await User.updateOne({ _id: userId }, { packageExpiry: null }, { new: true })
+  // ✅ Local DB তে immediately update করো
+  // Webhook আসতে delay হতে পারে
+  await Subscription.updateOne(
+    { _id: subscription._id },
+    { status: 'cancelled', expiredAt: null },
+  )
 
-  return result
+  await User.updateOne({ _id: userId }, { packageExpiry: null })
+
+  return { success: true, message: 'Subscription cancelled successfully' }
 }
 
 const deleteSubscription = async (id: string) => {

@@ -10,15 +10,13 @@ import { notifyUserAboutSubscriptionChange } from './payments.utils'
 
 // ==================== HANDLE WEBHOOK ====================
 const handleRevenueCatWebhook = async (event: any) => {
-  console.log(
-    `📥 RevenueCat Webhook: ${event.type} | User: ${event.app_user_id}`,
-  )
+  console.log(`📥 RevenueCat Webhook: ${event.type} | User: ${event.app_user_id}`)
   console.log('=== FULL WEBHOOK PAYLOAD ===')
   console.log(JSON.stringify(event, null, 2))
 
   const userId = event.app_user_id
   const eventType = event.type as string
-  const productId = event.new_product_id || event.product_id // 🔑 PRODUCT_CHANGE এ new_product_id ধরো
+  const productId = event.new_product_id || event.product_id
   const entitlementIds = event.entitlement_ids || []
   const entitlement = entitlementIds[0] || 'Foto Tidy Pro'
   const expiredAt = event.expiration_at_ms
@@ -29,6 +27,15 @@ const handleRevenueCatWebhook = async (event: any) => {
     console.warn('Invalid webhook payload - missing userId or eventType')
     return { success: false, message: 'Invalid payload' }
   }
+
+  // ✅ event type অনুযায়ী status নির্ধারণ করো
+  const isTerminalEvent = ['EXPIRATION', 'CANCELLATION'].includes(eventType)
+
+  let newStatus: 'active' | 'expired' | 'cancelled' | 'grace_period' = 'active'
+  if (eventType === 'CANCELLATION') newStatus = 'cancelled'
+  else if (eventType === 'EXPIRATION') newStatus = 'expired'
+  else if (eventType === 'BILLING_ISSUE') newStatus = 'grace_period'
+  else newStatus = 'active'
 
   const MAX_RETRIES = 3
   let lastError: any
@@ -42,15 +49,12 @@ const handleRevenueCatWebhook = async (event: any) => {
           revenueCatAppUserId: userId,
         }).session(session)
 
-        const isTerminalEvent = ['EXPIRATION', 'CANCELLATION'].includes(
-          eventType,
-        )
-
         if (subscription) {
           subscription.entitlement = entitlement
           subscription.productId = productId || subscription.productId
-          subscription.status = isTerminalEvent ? 'expired' : 'active'
+          subscription.status = newStatus // ✅ correct status
           if (expiredAt) subscription.expiredAt = expiredAt
+          if (isTerminalEvent) subscription.expiredAt = null // ✅ terminal হলে expiry null
           subscription.revenueCatTransactionId =
             event.original_transaction_id || event.transaction_id
           await subscription.save({ session })
@@ -62,8 +66,8 @@ const handleRevenueCatWebhook = async (event: any) => {
                 revenueCatAppUserId: userId,
                 entitlement,
                 productId,
-                status: isTerminalEvent ? 'expired' : 'active',
-                expiredAt,
+                status: newStatus,
+                expiredAt: isTerminalEvent ? null : expiredAt,
                 revenueCatTransactionId:
                   event.original_transaction_id || event.transaction_id,
               },
@@ -72,7 +76,7 @@ const handleRevenueCatWebhook = async (event: any) => {
           )
         }
 
-        // Payment record
+        // ✅ Payment record — শুধু purchase/renewal এ
         if (['INITIAL_PURCHASE', 'RENEWAL'].includes(eventType) && productId) {
           const transactionId =
             event.original_transaction_id || event.transaction_id
@@ -103,14 +107,16 @@ const handleRevenueCatWebhook = async (event: any) => {
           }
         }
 
-        // Update User expiry
-        if (expiredAt && !isTerminalEvent) {
+        // ✅ User packageExpiry update
+        if (!isTerminalEvent && expiredAt) {
+          // active/renewal → expiry set করো
           await User.findByIdAndUpdate(
             userId,
             { packageExpiry: expiredAt },
             { session },
           )
         } else if (isTerminalEvent) {
+          // cancelled/expired → expiry null করো
           await User.findByIdAndUpdate(
             userId,
             { packageExpiry: null },
@@ -120,8 +126,9 @@ const handleRevenueCatWebhook = async (event: any) => {
       })
 
       console.log(
-        `✅ Webhook processed successfully: ${eventType} | Product: ${productId} | User: ${userId}`,
+        `✅ Webhook processed: ${eventType} | Status: ${newStatus} | Product: ${productId} | User: ${userId}`,
       )
+
       await notifyUserAboutSubscriptionChange(userId, eventType, expiredAt)
 
       return { success: true, eventType, userId, productId }
