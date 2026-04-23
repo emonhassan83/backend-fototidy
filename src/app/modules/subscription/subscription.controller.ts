@@ -5,7 +5,7 @@ import sendResponse from '../../utils/sendResponse'
 import { SUBSCRIPTION_STATUS } from './subscription.constants';
 
 const verifySubscription = catchAsync(async (req: Request, res: Response) => {
-  const result = await subscriptionService.verifySubscription(req.body);
+  const result = await subscriptionService.verifyAndSaveSubscription(req.user._id, req.body);
 
   sendResponse(res, {
     success: true,
@@ -14,17 +14,6 @@ const verifySubscription = catchAsync(async (req: Request, res: Response) => {
     data: result,
   });
 });
-
-// const restoreSubscription = catchAsync(async (req: Request, res: Response) => {
-//   const result = await subscriptionService.restoreSubscription(req.body);
-
-//   sendResponse(res, {
-//     success: true,
-//     statusCode: 200,
-//     message: 'Subscription verified & recorded successfully',
-//     data: result,
-//   });
-// });
 
 const handleAppleServerNotification = catchAsync(async (req: Request, res: Response) => {
   const result = await subscriptionService.handleAppleWebhook(req.body);

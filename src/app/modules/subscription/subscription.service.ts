@@ -14,16 +14,7 @@ import emailSender from '../../utils/emailSender'
 import config from '../../config'
 import mongoose from 'mongoose'
 import axios from 'axios'
-
-const getPlanDisplayName = (packageIdentifier: string): string => {
-  const map: Record<string, string> = {
-    core:      'Foto Tidy Core (Monthly)',
-    core_year: 'Foto Tidy Core (Yearly)',
-    pro:       'Foto Tidy Pro (Monthly)',
-    pro_year:  'Foto Tidy Pro (Yearly)',
-  };
-  return map[packageIdentifier] || packageIdentifier;
-};
+import { verifyAppleReceipt } from './subscription.utils'
 
 export const startSubscriptionCron = () => {
   cron.schedule('0 0 * * *', async () => {
@@ -49,9 +40,7 @@ export const startSubscriptionCron = () => {
         const user = await User.findById(subscription.user)
         if (!user || user.isDeleted) continue
 
-        const packageTitle = subscription.package
-          ? (subscription.package as any).title
-          : 'Premium Subscription'
+        const packageTitle = 'Subscription Package'
 
         // Email Notification
         await emailSender(
@@ -141,219 +130,225 @@ export const startSubscriptionCron = () => {
   })
 }
 
-// ==================== VERIFY SUBSCRIPTION ====================
-const verifySubscription = async (payload: { userId: string; packageId?: string }) => {
-  const { userId } = payload;
-
-  const user = await User.findById(userId);
-  if (!user || user.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
-  }
-
-  try {
-    console.log(`🔍 RevenueCat V1 Verify for user: ${userId}`);
-
-    const response = await fetch(
-      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
-      {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${config.revenue_cat.secret_key}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new AppError(httpStatus.BAD_GATEWAY, `RevenueCat V1 failed: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const subscriber = data.subscriber;
-
-    // ==================== BEST LOGIC ====================
-    let bestExpiredAt = new Date(0);
-    let bestProductId = '';
-
-    // 1️⃣ প্রথমে entitlement লেভেল থেকে active subscription খুঁজি
-    if (subscriber?.entitlements) {
-      for (const [entKey, ent] of Object.entries<any>(subscriber.entitlements)) {
-        if (ent.expires_date) {
-          const expDate = new Date(ent.expires_date);
-          if (expDate > bestExpiredAt) {
-            bestExpiredAt = expDate;
-            bestProductId = ent.product_identifier; // এখানে "core_year", "pro_year", "core" আসবে
-          }
-        }
-      }
-    }
-
-    // 2️⃣ fallback: যদি entitlement না থাকে, subscriptions থেকে খুঁজি
-    if (!bestProductId && subscriber?.subscriptions) {
-      for (const [productKey, sub] of Object.entries<any>(subscriber.subscriptions)) {
-        if (sub.expires_date) {
-          const expDate = new Date(sub.expires_date);
-          if (expDate > bestExpiredAt) {
-            bestExpiredAt = expDate;
-            bestProductId = productKey;
-          }
-        }
-      }
-    }
-
-    const expiredAt = bestExpiredAt;
-    const isActive = expiredAt > new Date();
-
-    console.log(`✅ FINAL Best Product: ${bestProductId} | Expires: ${expiredAt} | Active: ${isActive}`);
-
-    if (!isActive || !bestProductId) {
-      await Subscription.updateOne({ user: userId }, { status: SUBSCRIPTION_STATUS.expired });
-      await User.findByIdAndUpdate(userId, { packageExpiry: null });
-      return { active: false, message: 'Subscription has expired' };
-    }
-
-    // Save to DB
-    const subscription = await Subscription.findOneAndUpdate(
-      { user: userId },
-      {
-        user: userId,
-        revenueCatAppUserId: userId,
-        entitlement: "Foto Tidy Pro",
-        productId: bestProductId,
-        status: SUBSCRIPTION_STATUS.active,
-        expiredAt,
-        revenueCatTransactionId: subscriber.original_transaction_id,
-      },
-      { upsert: true, new: true }
-    );
-
-    await User.findByIdAndUpdate(userId, { packageExpiry: expiredAt });
-
-    return {
-      active: true,
-      subscription,
-      expiredAt,
-      productId: bestProductId,
-      message: 'Subscription verified successfully',
-    };
-
-  } catch (error: any) {
-    console.error('RevenueCat V1 Verify Error:', error);
-    throw error instanceof AppError ? error : new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Verify failed');
-  }
-};
-
-// const restoreSubscription = async (payload: {
-//   userId: string
-//   packageId: string
-//   receiptData?: string
-// }) => {
-//   const { userId, packageId, receiptData } = payload
-
-//   const user = await User.findById(userId)
-//   if (!user || user.isDeleted) {
-//     throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
-//   }
-
-//   if (receiptData) {
-//     return await verifySubscription({ userId, packageId, receiptData })
-//   }
-
-//   // Fallback: DB থেকে চেক
-//   const existingSub = await Subscription.findOne({ user: userId })
-//   if (!existingSub) {
-//     return { active: false, message: 'No subscription found to restore' }
-//   }
-
-//   const isActive = existingSub.expiredAt && existingSub.expiredAt > new Date()
-
-//   if (isActive) {
-//     await Subscription.updateOne(
-//       { user: userId },
-//       { status: SUBSCRIPTION_STATUS.active },
-//     )
-//     await User.findByIdAndUpdate(userId, {
-//       packageExpiry: existingSub.expiredAt,
+// const verifyAppleReceipt = async (receiptData: string) => {
+//   try {
+//     const purchases = await verifyAppleReceipt.validate({
+//       receipt: receiptData,
 //     })
-//   }
 
-//   return {
-//     active: isActive,
-//     subscription: existingSub,
-//     expiredAt: existingSub.expiredAt,
-//     message: isActive
-//       ? 'Subscription restored successfully'
-//       : 'Subscription has expired',
+//     if (!purchases || purchases.length === 0) {
+//       throw new Error('No valid purchases found')
+//     }
+
+//     // Latest active purchase খুঁজো
+//     const now = Date.now()
+//     const activePurchases = purchases.filter(
+//       (p: any) => p.expirationDate && p.expirationDate > now,
+//     )
+
+//     // সবচেয়ে দেরিতে expire হবে সেটা নাও
+//     const latestPurchase = activePurchases.sort(
+//       (a: any, b: any) => b.expirationDate - a.expirationDate,
+//     )[0] || purchases[purchases.length - 1]
+
+//     return {
+//       productId: latestPurchase.productId,
+//       originalTransactionId: latestPurchase.originalTransactionId,
+//       latestTransactionId: latestPurchase.transactionId,
+//       expirationDate: latestPurchase.expirationDate
+//         ? new Date(latestPurchase.expirationDate)
+//         : null,
+//       isActive: latestPurchase.expirationDate
+//         ? latestPurchase.expirationDate > now
+//         : false,
+//       purchases,
+//     }
+//   } catch (err: any) {
+//     throw new Error(`Apple receipt verification failed: ${err.message}`)
 //   }
 // }
 
+const verifyAndSaveSubscription = async (
+  userId: string,
+  receiptData: string,
+) => {
+  const user = await User.findById(userId)
+  if (!user || user.isDeleted) {
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+  }
+
+  // Apple থেকে verify করো
+  const verifiedReceipt = await verifyAppleReceipt(receiptData)
+
+  if (!verifiedReceipt.isActive) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      'No active subscription found in receipt',
+    )
+  }
+
+  const {
+    productId,
+    originalTransactionId,
+    latestTransactionId,
+    expirationDate,
+  } = verifiedReceipt
+
+  // productId থেকে entitlement বের করো
+  const entitlement = productId.toLowerCase().includes('pro') ? 'pro' : 'core'
+
+  // Existing subscription check করো
+  const existingSubscription = await Subscription.findOne({
+    user: userId,
+    appleOriginalTransactionId: originalTransactionId,
+  })
+
+  if (existingSubscription) {
+    // Update existing
+    await Subscription.updateOne(
+      { _id: existingSubscription._id },
+      {
+        productId,
+        entitlement,
+        status: 'active',
+        expiredAt: expirationDate,
+        appleLatestTransactionId: latestTransactionId,
+        appleReceiptData: receiptData,
+      },
+    )
+  } else {
+    // Create new — আগের সব cancel করো
+    await Subscription.updateMany(
+      { user: userId, status: 'active' },
+      { status: 'cancelled' },
+    )
+
+    await Subscription.create({
+      user: userId,
+      productId,
+      entitlement,
+      store: 'APP_STORE',
+      status: 'active',
+      expiredAt: expirationDate,
+      appleOriginalTransactionId: originalTransactionId,
+      appleLatestTransactionId: latestTransactionId,
+      appleReceiptData: receiptData,
+    })
+  }
+
+  // User packageExpiry update করো
+  await User.updateOne({ _id: userId }, { packageExpiry: expirationDate })
+
+  return {
+    success: true,
+    productId,
+    entitlement,
+    expiredAt: expirationDate,
+    isProUser: entitlement === 'pro',
+  }
+}
+
 const handleAppleWebhook = async (payload: any) => {
-  console.log('📥 Apple Server Notification received')
-  console.log(JSON.stringify(payload, null, 2))
+  console.log('📥 Apple Webhook:', payload.notificationType)
 
-  const notificationType = payload.notification_type || payload.notificationType
-  const unifiedReceipt =
-    payload.unified_receipt || payload.data?.unified_receipt
-  const latestInfo = unifiedReceipt?.latest_receipt_info?.[0]
+  const notificationType = payload.notificationType
+  const latestReceiptInfo =
+    payload.unified_receipt?.latest_receipt_info?.[0] ||
+    payload.latest_receipt_info?.[0]
 
-  if (!latestInfo) {
+  if (!latestReceiptInfo) {
     console.warn('No receipt info in webhook payload')
     return { success: false }
   }
 
-  const productId = latestInfo.product_id
-  const transactionId =
-    latestInfo.original_transaction_id || latestInfo.transaction_id
-  const expiresMs = Number(latestInfo.expires_date_ms)
-  const expiredAt = new Date(expiresMs)
-  const appUserId = payload.app_account_token || latestInfo.app_account_token
+  const originalTransactionId = latestReceiptInfo.original_transaction_id
+  const productId = latestReceiptInfo.product_id
+  const expirationDateMs = latestReceiptInfo.expires_date_ms
+  const expirationDate = expirationDateMs
+    ? new Date(parseInt(expirationDateMs))
+    : null
 
-  const isTerminal = ['CANCEL', 'DID_FAIL_TO_RENEW', 'EXPIRED'].includes(
-    notificationType,
-  )
+  // Subscription খুঁজো
+  const subscription = await Subscription.findOne({
+    appleOriginalTransactionId: originalTransactionId,
+  })
 
-  if (!appUserId) {
-    console.warn('Could not determine userId from webhook')
+  if (!subscription) {
+    console.warn(
+      'Subscription not found for transaction:',
+      originalTransactionId,
+    )
     return { success: false }
   }
 
-  const session = await mongoose.startSession()
-  try {
-    await session.withTransaction(async () => {
-      await Subscription.findOneAndUpdate(
-        { transactionId },
+  const userId = subscription.user.toString()
+
+  // notification type অনুযায়ী handle করো
+  switch (notificationType) {
+    case 'DID_RENEW':
+    case 'INITIAL_BUY':
+      // ✅ Renewal বা নতুন purchase
+      await Subscription.updateOne(
+        { _id: subscription._id },
         {
+          status: 'active',
+          expiredAt: expirationDate,
+          appleLatestTransactionId: latestReceiptInfo.transaction_id,
           productId,
-          status: isTerminal
-            ? SUBSCRIPTION_STATUS.expired
-            : SUBSCRIPTION_STATUS.active,
-          expiredAt,
         },
-        { session },
       )
+      await User.updateOne({ _id: userId }, { packageExpiry: expirationDate })
+      console.log(`✅ Renewed: ${productId} | Expires: ${expirationDate}`)
+      break
 
-      if (isTerminal) {
-        await User.findOneAndUpdate(
-          { _id: appUserId },
-          { packageExpiry: null },
-          { session },
-        )
-      } else {
-        await User.findOneAndUpdate(
-          { _id: appUserId },
-          { packageExpiry: expiredAt },
-          { session },
-        )
+    case 'DID_CHANGE_RENEWAL_PREF':
+    case 'DID_CHANGE_RENEWAL_STATUS':
+      // ✅ Plan change বা auto-renewal toggle
+      const autoRenewStatus = payload.auto_renew_status
+      if (autoRenewStatus === '0') {
+        // Auto-renewal বন্ধ — এখনো active কিন্তু renew হবে না
+        console.log('Auto-renewal disabled for:', originalTransactionId)
       }
-    })
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { expiredAt: expirationDate },
+      )
+      break
 
-    console.log(
-      `✅ Apple Webhook processed: ${notificationType} | Product: ${productId}`,
-    )
-    return { success: true, notificationType, productId }
-  } finally {
-    session.endSession()
+    case 'CANCEL':
+      // ✅ Apple refund করে cancel করেছে
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'cancelled', expiredAt: null },
+      )
+      await User.updateOne({ _id: userId }, { packageExpiry: null })
+      console.log(`❌ Cancelled: ${originalTransactionId}`)
+      break
+
+    case 'DID_FAIL_TO_RENEW':
+      // ✅ Payment failed — grace period
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'grace_period' },
+      )
+      console.log(`⚠️ Grace period: ${originalTransactionId}`)
+      break
+
+    case 'EXPIRED':
+      // ✅ Subscription expired
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'expired', expiredAt: expirationDate },
+      )
+      await User.updateOne({ _id: userId }, { packageExpiry: null })
+      console.log(`🕐 Expired: ${originalTransactionId}`)
+      break
+
+    default:
+      console.log('Unhandled notification type:', notificationType)
   }
+
+  return { success: true, notificationType, originalTransactionId }
 }
 
 const getAllSubscription = async (query: Record<string, any>) => {
@@ -394,35 +389,35 @@ const getSubscriptionById = async (id: string) => {
 }
 
 const chancelSubscriptionFromDB = async (userId: string) => {
-  const user = await User.findById(userId);
+  const user = await User.findById(userId)
   if (!user || user?.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
   }
 
   const subscription = await Subscription.findOne({
     user: userId,
     status: 'active',
     isDeleted: false,
-  });
+  })
 
   if (!subscription) {
-    throw new AppError(httpStatus.NOT_FOUND, 'Active subscription not found!');
+    throw new AppError(httpStatus.NOT_FOUND, 'Active subscription not found!')
   }
 
   // ✅ সবসময় local DB তে cancel mark করো
   await Subscription.updateOne(
     { _id: subscription._id },
     { status: 'cancelled', expiredAt: null },
-  );
+  )
 
-  await User.updateOne({ _id: userId }, { packageExpiry: null });
+  await User.updateOne({ _id: userId }, { packageExpiry: null })
 
   return {
     success: true,
-    message: 'Subscription cancelled in our system. Please also cancel from your App Store / Play Store account settings.',
-  };
-};
-
+    message:
+      'Subscription cancelled in our system. Please also cancel from your App Store / Play Store account settings.',
+  }
+}
 
 const deleteSubscription = async (id: string) => {
   const subscription = await Subscription.findById(id)
@@ -443,7 +438,8 @@ const deleteSubscription = async (id: string) => {
 }
 
 export const subscriptionService = {
-  verifySubscription,
+  // verifyAppleReceipt,
+  verifyAndSaveSubscription,
   getAllSubscription,
   getSubscriptionById,
   chancelSubscriptionFromDB,

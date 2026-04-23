@@ -155,13 +155,9 @@ const geUserByIdFromDB = async (id: string) => {
     freeStorage: formattedFreeStorage,
     storageLimit,
     isActiveSubscription,
-    type: subscriptionType,
-    isProUser,
-    subscription: activeSubscription ? {
-      entitlement: activeSubscription.entitlement,
-      productId: activeSubscription.productId,
-      expiredAt: activeSubscription.expiredAt,
-    } : null,
+    subscriptionType,            // 👈 নতুন field
+    subscriptionExpiry: activeSubscription?.expiredAt || null, // 👈 expiry date return করো
+    isProUser,                   // 👈 pro user flag
     isGalleryLock,
     isActiveFreeTrial,
   };

@@ -3,14 +3,12 @@ import { Model, Types } from 'mongoose'
 export interface TSubscriptions {
   _id?: Types.ObjectId;
   user: Types.ObjectId;
-  revenueCatAppUserId: string;
-  entitlement: string;
+  appleOriginalTransactionId: string;
+  appleLatestTransactionId: string;
+  appleReceiptData?: string;
   productId?: string;
-  revenueCatTransactionId?: string;
-  package?: Types.ObjectId;
-  packageIdentifier: string;
-  transactionId: string;
-  receiptData: string
+  entitlement: string;
+  store: 'APP_STORE'| 'PLAY_STORE';
   status: 'active' | 'expired' | 'cancelled' | 'grace_period';
   expiredAt?: Date | null;
   isDeleted?: boolean;

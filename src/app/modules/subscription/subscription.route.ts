@@ -9,7 +9,7 @@ const router = Router()
 
 router.post(
   '/verify',
-  // zodValidationRequest(subscriptionValidation.verifyValidationSchema),
+  auth(USER_ROLE.user, USER_ROLE.admin),
   subscriptionController.verifySubscription,
 )
 router.post(

@@ -6,37 +6,48 @@ import { sendNotification } from '../../utils/sentNotification'
 import { TUser } from '../user/user.interface'
 import config from '../../config'
 
-const APPLE_PRODUCTION_URL = 'https://buy.itunes.apple.com/verifyReceipt';
-const APPLE_SANDBOX_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
+import * as appleReceiptVerify from 'node-apple-receipt-verify'
 
-export const validateWithApple = async (receiptData: string): Promise<any> => {
-  const body = {
-    'receipt-data': receiptData,
-    password: config.apple?.shared_secret || '',
-    'exclude-old-transactions': true,
-  };
+// Initialize once
+appleReceiptVerify.config({
+  secret: config.apple.shared_secret!, // App Store Connect থেকে নাও
+  environment: ['production', 'sandbox'], // প্রথমে production, fallback sandbox
+  excludeOldTransactions: true,
+})
 
-  let response = await fetch(APPLE_PRODUCTION_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+export const verifyAppleReceipt = async (receiptData: string) => {
+  try {
+    const purchases = await appleReceiptVerify.validate({ receipt: receiptData })
 
-  let data = await response.json();
+    if (!purchases || purchases.length === 0) {
+      throw new Error('No valid purchases found')
+    }
 
-  // Sandbox receipt হলে sandbox endpoint-এ retry
-  if (data.status === 21007) {
-    console.log('🔄 Sandbox receipt detected, retrying with sandbox...');
-    response = await fetch(APPLE_SANDBOX_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    data = await response.json();
+    const now = Date.now()
+    const activePurchases = purchases.filter(
+      (p: any) => p.expirationDate && p.expirationDate > now,
+    )
+
+    const latestPurchase =
+      activePurchases.sort((a: any, b: any) => b.expirationDate - a.expirationDate)[0] ||
+      purchases[purchases.length - 1]
+
+    return {
+      productId: latestPurchase.productId,
+      originalTransactionId: latestPurchase.originalTransactionId,
+      latestTransactionId: latestPurchase.transactionId,
+      expirationDate: latestPurchase.expirationDate
+        ? new Date(latestPurchase.expirationDate)
+        : null,
+      isActive: latestPurchase.expirationDate
+        ? latestPurchase.expirationDate > now
+        : false,
+      purchases,
+    }
+  } catch (err: any) {
+    throw new Error(`Apple receipt verification failed: ${err.message}`)
   }
-
-  return data;
-};
+}
 
 export const subscriptionNotifyToAdmin = async (
   action: 'ADDED',
