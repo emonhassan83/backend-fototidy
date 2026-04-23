@@ -130,18 +130,12 @@ const geUserByIdFromDB = async (id: string) => {
 
   const isActiveSubscription = !!activeSubscription;
 
-  let subscriptionType: 'core' | 'pro' | null = null;
+  let subscriptionType: 'core' | 'pro' | 'core_year' | 'pro_year' | null = null;
   let isProUser = false;
 
   if (activeSubscription) {
     const identifier = (activeSubscription.productId || '').toLowerCase().trim();
-
-    if (identifier === 'pro' || identifier === 'pro_year') {
-      subscriptionType = 'pro';
-      isProUser = true;
-    } else if (identifier === 'core' || identifier === 'core_year') {
-      subscriptionType = 'core';
-    }
+    subscriptionType = identifier as 'core' | 'pro' | 'core_year' | 'pro_year' | null
   }
 
   const isGalleryLock = !!user.galleryKey;
