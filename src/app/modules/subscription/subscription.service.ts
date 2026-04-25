@@ -11,10 +11,7 @@ import { cleanupUserData } from '../../utils/cleanupUserData'
 import { modeType } from '../notification/notification.interface'
 import { sendNotification } from '../../utils/sentNotification'
 import emailSender from '../../utils/emailSender'
-import config from '../../config'
-import mongoose from 'mongoose'
-import axios from 'axios'
-import { verifyAppleReceipt } from './subscription.utils'
+import { verifyAppleReceipt, verifyPlayReceipt } from './subscription.utils'
 
 export const startSubscriptionCron = () => {
   cron.schedule('0 0 * * *', async () => {
@@ -248,6 +245,65 @@ const verifyAndSaveSubscription = async (
   }
 }
 
+// ===== verifyAndSavePlaySubscription =====
+const verifyAndSavePlaySubscription = async (
+  userId: string,
+  payload: { productId: string; purchaseToken: string },
+) => {
+  const user = await User.findById(userId)
+  if (!user || user.isDeleted) {
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+  }
+
+  const { productId, purchaseToken } = payload
+  const receipt = await verifyPlayReceipt(
+    'com.fototidy.fotoTidy',
+    productId,
+    purchaseToken,
+  )
+
+  const expiredAt = receipt.expiryTimeMillis
+    ? new Date(Number(receipt.expiryTimeMillis))
+    : null
+
+  const isActive = expiredAt ? expiredAt > new Date() : false
+  const isCancelled =
+    receipt.cancelReason !== null && receipt.cancelReason !== undefined
+
+  let status: 'active' | 'expired' | 'cancelled' | 'grace_period' = 'active'
+  if (isCancelled) status = 'cancelled'
+  else if (!isActive) status = 'expired'
+  else status = 'active'
+
+  const entitlement = productId.toLowerCase().includes('pro') ? 'pro' : 'core'
+
+  await Subscription.updateOne(
+    { user: userId, store: 'PLAY_STORE' },
+    {
+      user: userId,
+      productId,
+      entitlement,
+      store: 'PLAY_STORE',
+      status,
+      expiredAt,
+      playPurchaseToken: purchaseToken, // ✅ আলাদা field
+    },
+    { upsert: true },
+  )
+
+  if (expiredAt && status === 'active') {
+    await User.updateOne({ _id: userId }, { packageExpiry: expiredAt })
+  }
+
+  return {
+    productId,
+    entitlement,
+    expiredAt,
+    status,
+    isProUser: entitlement === 'pro',
+  }
+}
+
 const handleAppleWebhook = async (payload: any) => {
   console.log('📥 Apple Webhook:', payload.notificationType)
 
@@ -351,6 +407,94 @@ const handleAppleWebhook = async (payload: any) => {
   return { success: true, notificationType, originalTransactionId }
 }
 
+// ===== handlePlayWebhook =====
+const handlePlayWebhook = async (payload: any) => {
+  console.log(
+    '📥 Play Store Webhook:',
+    payload.subscriptionNotification?.notificationType,
+  )
+
+  const subscriptionNotification = payload.subscriptionNotification
+  if (!subscriptionNotification) {
+    console.warn('No subscriptionNotification in webhook payload')
+    return { success: false }
+  }
+
+  const { notificationType, purchaseToken, subscriptionId } =
+    subscriptionNotification
+
+  const subscription = await Subscription.findOne({
+    productId: subscriptionId,
+    store: 'PLAY_STORE',
+  })
+
+  if (!subscription) {
+    console.warn('Subscription not found:', subscriptionId)
+    return { success: false }
+  }
+
+  const userId = subscription.user.toString()
+
+  switch (notificationType) {
+    case 1: // SUBSCRIPTION_RECOVERED
+    case 2: // SUBSCRIPTION_RENEWED
+    case 4: {
+      // SUBSCRIPTION_PURCHASED
+      // ✅ Play API call করে fresh expiry নাও
+      const receipt = await verifyPlayReceipt(
+        'com.fototidy.fotoTidy',
+        subscriptionId,
+        purchaseToken,
+      )
+      const expiredAt = receipt.expiryTimeMillis
+        ? new Date(Number(receipt.expiryTimeMillis))
+        : null
+
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'active', expiredAt, playPurchaseToken: purchaseToken },
+      )
+      if (expiredAt) {
+        await User.updateOne({ _id: userId }, { packageExpiry: expiredAt })
+      }
+      console.log(`✅ Active: ${subscriptionId} | Expires: ${expiredAt}`)
+      break
+    }
+
+    case 5: // SUBSCRIPTION_ON_HOLD
+    case 6: // SUBSCRIPTION_IN_GRACE_PERIOD
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'grace_period' },
+      )
+      console.log(`⚠️ Grace period: ${subscriptionId}`)
+      break
+
+    case 3: // SUBSCRIPTION_CANCELED
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'cancelled', expiredAt: null },
+      )
+      await User.updateOne({ _id: userId }, { packageExpiry: null })
+      console.log(`❌ Cancelled: ${subscriptionId}`)
+      break
+
+    case 13: // SUBSCRIPTION_EXPIRED
+      await Subscription.updateOne(
+        { _id: subscription._id },
+        { status: 'expired' },
+      )
+      await User.updateOne({ _id: userId }, { packageExpiry: null })
+      console.log(`🕐 Expired: ${subscriptionId}`)
+      break
+
+    default:
+      console.log('Unhandled Play notification type:', notificationType)
+  }
+
+  return { success: true, notificationType, subscriptionId }
+}
+
 const getAllSubscription = async (query: Record<string, any>) => {
   const subscriptionModel = new QueryBuilder(
     Subscription.find({ isDeleted: false })
@@ -438,11 +582,12 @@ const deleteSubscription = async (id: string) => {
 }
 
 export const subscriptionService = {
-  // verifyAppleReceipt,
   verifyAndSaveSubscription,
+  verifyAndSavePlaySubscription,
   getAllSubscription,
   getSubscriptionById,
   chancelSubscriptionFromDB,
   deleteSubscription,
   handleAppleWebhook,
+  handlePlayWebhook,
 }

@@ -17,6 +17,17 @@ router.post(
   subscriptionController.handleAppleServerNotification,
 )
 
+router.post(
+  '/verify/google',
+  auth(USER_ROLE.user, USER_ROLE.admin),
+  zodValidationRequest(subscriptionValidation.verifyPlayValidationSchema),
+  subscriptionController.verifyPlaySubscription,
+)
+router.post(
+  '/webhook/google',
+  subscriptionController.handlePlayWebhook,
+)
+
 router.delete(
   '/:id',
   auth(USER_ROLE.admin, USER_ROLE.user),

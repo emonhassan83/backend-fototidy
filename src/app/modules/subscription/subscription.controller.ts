@@ -2,28 +2,59 @@ import { Request, Response } from 'express'
 import catchAsync from '../../utils/catchAsync'
 import { subscriptionService } from './subscription.service'
 import sendResponse from '../../utils/sendResponse'
-import { SUBSCRIPTION_STATUS } from './subscription.constants';
+import { SUBSCRIPTION_STATUS } from './subscription.constants'
 
 const verifySubscription = catchAsync(async (req: Request, res: Response) => {
-  const result = await subscriptionService.verifyAndSaveSubscription(req.user._id, req.body.receiptData);
+  const result = await subscriptionService.verifyAndSaveSubscription(
+    req.user._id,
+    req.body.receiptData,
+  )
 
   sendResponse(res, {
     success: true,
     statusCode: 200,
     message: 'Subscription verified & recorded successfully',
     data: result,
-  });
-});
+  })
+})
 
-const handleAppleServerNotification = catchAsync(async (req: Request, res: Response) => {
-  const result = await subscriptionService.handleAppleWebhook(req.body);
+const verifyPlaySubscription = catchAsync(
+  async (req: Request, res: Response) => {
+    const result = await subscriptionService.verifyAndSavePlaySubscription(
+      req.user._id,
+      req.body,
+    )
+
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: 'Play Store subscription verified & recorded successfully',
+      data: result,
+    })
+  },
+)
+
+const handleAppleServerNotification = catchAsync(
+  async (req: Request, res: Response) => {
+    const result = await subscriptionService.handleAppleWebhook(req.body)
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: 'Webhook received successfully',
+      data: result,
+    })
+  },
+)
+
+const handlePlayWebhook = catchAsync(async (req: Request, res: Response) => {
+  const result = await subscriptionService.handlePlayWebhook(req.body)
   sendResponse(res, {
     success: true,
     statusCode: 200,
     message: 'Webhook received successfully',
     data: result,
-  });
-});
+  })
+})
 
 const getAllSubscription = catchAsync(async (req: Request, res: Response) => {
   const result = await subscriptionService.getAllSubscription(req.query)
@@ -62,7 +93,9 @@ const getSubscriptionById = catchAsync(async (req: Request, res: Response) => {
 })
 
 const chancelSubscription = catchAsync(async (req, res) => {
-  const result = await subscriptionService.chancelSubscriptionFromDB(req.user._id)
+  const result = await subscriptionService.chancelSubscriptionFromDB(
+    req.user._id,
+  )
 
   sendResponse(res, {
     success: true,
@@ -85,7 +118,9 @@ const deleteSubscription = catchAsync(async (req: Request, res: Response) => {
 
 export const subscriptionController = {
   verifySubscription,
+  verifyPlaySubscription,
   handleAppleServerNotification,
+  handlePlayWebhook,
   getAllSubscription,
   getSubscriptionById,
   getMySubscription,

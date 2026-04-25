@@ -5,7 +5,7 @@ import { TPackage } from '../package/package.interface'
 import { sendNotification } from '../../utils/sentNotification'
 import { TUser } from '../user/user.interface'
 import config from '../../config'
-
+import { google } from 'googleapis';
 import * as appleReceiptVerify from 'node-apple-receipt-verify'
 
 // Initialize once
@@ -51,6 +51,22 @@ export const verifyAppleReceipt = async (receiptData: string) => {
     throw new Error(`Apple receipt verification failed: ${err.message}`)
   }
 }
+
+export const verifyPlayReceipt = async (packageName: string, productId: string, purchaseToken: string) => {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: 'service-account.json', // তোমার Google service account key --> config.google.service_account_path, // config থেকে নাও
+    scopes: ['https://www.googleapis.com/auth/androidpublisher'],
+  });
+
+  const androidPublisher = google.androidpublisher({ version: 'v3', auth });
+  const res = await androidPublisher.purchases.subscriptions.get({
+    packageName,
+    subscriptionId: productId,
+    token: purchaseToken,
+  });
+
+  return res.data; // expiryTimeMillis, autoRenewing, cancelReason
+};
 
 export const subscriptionNotifyToAdmin = async (
   action: 'ADDED',
