@@ -46,6 +46,7 @@ const createTagIntoDB = async (payload: ITag, userId: string) => {
     const activeSubscription = await Subscription.findOne({
       user: userId,
       status: SUBSCRIPTION_STATUS.active,
+      expiredAt: { $gt: new Date() },
       isDeleted: false,
     });
 

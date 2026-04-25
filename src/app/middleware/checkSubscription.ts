@@ -42,7 +42,7 @@ const checkSubscriptionAccess = () => {
     const activeSubscription = await Subscription.findOne({
       user: userId,
       status: SUBSCRIPTION_STATUS.active,
-      expiredAt: { $gte: today }
+      expiredAt: { $gt: new Date() }
     })
 
     if (!activeSubscription) {

@@ -3,9 +3,10 @@ import { isFreeTrialActive } from "../../utils/checkFreeTrialActive";
 import { SUBSCRIPTION_STATUS } from "../subscription/subscription.constants";
 import { Subscription } from "../subscription/subscription.models";
 import httpStatus from 'http-status'
+import { User } from "../user/user.model";
 
 export const checkProPremiumAccess = async (user: any) => {
-  // 1. Free Trial থাকলে সবাইকে allow করুন
+  // 1. Free Trial থাকলে allow করুন
   if (isFreeTrialActive(user)) {
     return true;
   }
@@ -21,13 +22,13 @@ export const checkProPremiumAccess = async (user: any) => {
   if (!activeSub) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      'Now you have no active subscription. Please upgrade your plan.'
+      'You have no active subscription. Please upgrade your plan.'
     );
   }
 
-  // 3. Entitlement দিয়ে Pro চেক করুন (সবচেয়ে সঠিক উপায়)
-  const isProUser = activeSub.entitlement === 'Foto Tidy Pro' || 
-                    activeSub.entitlement?.toLowerCase().includes('pro');
+  // 3. Entitlement দিয়ে Pro চেক করুন
+  const entitlement = activeSub.entitlement?.toLowerCase();
+  const isProUser = entitlement === 'pro' || entitlement === 'pro_year';
 
   if (!isProUser) {
     throw new AppError(
@@ -37,4 +38,26 @@ export const checkProPremiumAccess = async (user: any) => {
   }
 
   return true;
+};
+
+export const hasUnlimitedAccess = async (userId: string) => {
+  const user = await User.findById(userId);
+  if (!user || user.isDeleted) return false;
+
+  const now = new Date();
+
+  // Free Trial check
+  if (user.isEnabledFreeTrial && user.freeTrialExpiry && new Date(user.freeTrialExpiry) > now) {
+    return true;
+  }
+
+  // Active subscription check
+  const activeSub = await Subscription.findOne({
+    user: userId,
+    status: SUBSCRIPTION_STATUS.active,
+    expiredAt: { $gt: now },
+    isDeleted: false,
+  });
+
+  return !!activeSub;
 };

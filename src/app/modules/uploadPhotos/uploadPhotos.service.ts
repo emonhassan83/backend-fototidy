@@ -6,7 +6,7 @@ import { UploadPhoto } from './uploadPhotos.model'
 import { User } from '../user/user.model'
 import { Contents } from '../contents/contents.models'
 import { Tag } from '../tags/tags.model'
-import { checkProPremiumAccess } from './uploadPhotos.utils'
+import { checkProPremiumAccess, hasUnlimitedAccess } from './uploadPhotos.utils'
 import { Favorite } from '../favorite/favorite.model'
 import { endOfDay, startOfDay } from 'date-fns'
 import mongoose from 'mongoose'
@@ -21,81 +21,68 @@ const createUploadPhotoIntoDB = async (
   payload: TUploadPhoto,
   userId: string,
 ) => {
-  const { tag: tagIds, fileSize } = payload
+  const { tag: tagIds, fileSize } = payload;
 
   // 1. Validate User
-  const user = await User.findById(userId)
+  const user = await User.findById(userId);
   if (!user || user.isDeleted) {
-    throw new AppError(httpStatus.NOT_FOUND, 'User not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'User not found!');
   }
 
-  // 2. Validate Tags (now array)
-  const tagIdsArray = Array.isArray(tagIds) ? tagIds : [tagIds]
-
+  // 2. Validate Tags
+  const tagIdsArray = Array.isArray(tagIds) ? tagIds : [tagIds];
   if (tagIdsArray.length === 0) {
-    throw new AppError(httpStatus.BAD_REQUEST, 'At least one tag is required!')
+    throw new AppError(httpStatus.BAD_REQUEST, 'At least one tag is required!');
   }
 
-  // Validate all tags exist and belong to user
   const tags = await Tag.find({
     _id: { $in: tagIdsArray },
     author: userId,
     isDeleted: false,
-  })
-
+  });
   if (tags.length !== tagIdsArray.length) {
-    throw new AppError(httpStatus.NOT_FOUND, 'One or more tags not found!')
+    throw new AppError(httpStatus.NOT_FOUND, 'One or more tags not found!');
   }
 
-  // 3. Determine User Access
-  const now = new Date()
-
-  const isPaidUser = user.packageExpiry && new Date(user.packageExpiry) > now
-
-  const isFreeTrialUser =
-    user.isEnabledFreeTrial &&
-    user.freeTrialExpiry &&
-    new Date(user.freeTrialExpiry) > now
-
-  const hasUnlimitedAccess = isPaidUser || isFreeTrialUser
+  // 3. Determine User Access (helper ব্যবহার করে)
+  const hasAccess = await hasUnlimitedAccess(userId);
 
   // 4. Storage Limit Check (Only for Free Tier)
-  if (!hasUnlimitedAccess) {
-    const content = await Contents.findOne({ isDeleted: false })
+  if (!hasAccess) {
+    const content = await Contents.findOne({ isDeleted: false });
     if (!content) {
-      throw new AppError(httpStatus.NOT_FOUND, 'System content not found!')
+      throw new AppError(httpStatus.NOT_FOUND, 'System content not found!');
     }
 
     if (typeof user.freeStorage !== 'number' || isNaN(user.freeStorage)) {
-      user.freeStorage = 0
+      user.freeStorage = 0;
     }
 
-    const newStorage = Number((user.freeStorage + fileSize).toFixed(4))
-
+    const newStorage = Number((user.freeStorage + fileSize).toFixed(4));
     if (newStorage > content.freeStorage) {
       throw new AppError(
         httpStatus.BAD_REQUEST,
         `You have reached your free storage limit (${content.freeStorage} MB). Please upgrade your plan.`,
-      )
+      );
     }
 
-    // Update user's free tier usage
-    user.freeStorage = newStorage
-    await user.save()
+    user.freeStorage = newStorage;
+    await user.save();
   }
 
   // 5. Assign author and tags
-  payload.author = user._id
-  payload.tag = tagIdsArray // Now array
+  payload.author = user._id;
+  payload.tag = tagIdsArray;
 
   // 6. Create Upload Record
-  const uploadPhoto = await UploadPhoto.create(payload)
+  const uploadPhoto = await UploadPhoto.create(payload);
   if (!uploadPhoto) {
-    throw new AppError(httpStatus.CONFLICT, 'Photo record not created!')
+    throw new AppError(httpStatus.CONFLICT, 'Photo record not created!');
   }
 
-  return uploadPhoto
-}
+  return uploadPhoto;
+};
+
 
 // Batch Upload - Now supports multiple tags per photo
 const batchUploadPhotoIntoDB = async (
